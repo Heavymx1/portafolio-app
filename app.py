@@ -7,7 +7,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Terminal Pro V26", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Terminal Pro V27", layout="wide", page_icon="🦁")
 
 # --- 🔐 LOGIN ---
 def check_password():
@@ -36,7 +36,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Heatmap Activo")
+st.title("🦁 Terminal Patrimonial: Multidivisa")
 
 URL_HOJA = st.secrets["SHEET_URL"]
 
@@ -66,10 +66,7 @@ def generar_grafico_historico(df_real):
     df_historia = pd.DataFrame(index=hist_usd.index)
     df_historia['Valor_Total'] = 0.0
     
-    CORRECCIONES = {
-        'SPYL': 'SPLG', 'IVVPESO': 'IVVPESO.MX', 'NAFTRAC': 'NAFTRAC.MX',
-        'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD'
-    }
+    CORRECCIONES = {'SPYL': 'SPLG', 'IVVPESO': 'IVVPESO.MX', 'NAFTRAC': 'NAFTRAC.MX', 'BTC': 'BTC-USD', 'ETH': 'ETH-USD'}
     
     for i, row in df_real.iterrows():
         t = row['Ticker']
@@ -92,10 +89,8 @@ def generar_grafico_historico(df_real):
     return df_historia
 
 # --- MERCADO ---
-def obtener_datos_mercado(tickers):
+def obtener_datos_mercado(tickers, usd_rate):
     data_dict = {}
-    try: usd_now = yf.Ticker("USDMXN=X").history(period="1d")['Close'].iloc[-1]
-    except: usd_now = 20.00
     
     CORRECCIONES = {
         'SPYL': 'SPLG', 'IVVPESO': 'IVVPESO.MX', 'NAFTRAC': 'NAFTRAC.MX', 'GLD': 'GLD.MX',
@@ -130,16 +125,20 @@ def obtener_datos_mercado(tickers):
                     precio_nativo = hist['Close'].iloc[-1]
                     
                     if ".MX" in ticker_test: info['precio'] = precio_nativo
-                    else: info['precio'] = precio_nativo * usd_now
+                    else: info['precio'] = precio_nativo * usd_rate
                     
                     try:
                         rate = stock.info.get('dividendRate', 0)
                         yield_pct = stock.info.get('dividendYield', 0)
+                        
+                        # Rescate de dividendos híbrido
                         if (rate is None or rate == 0) and (yield_pct and yield_pct > 0):
                             rate = precio_nativo * yield_pct
                         if (rate is None or rate == 0):
                              rate = stock.info.get('trailingAnnualDividendRate', 0)
-                        if ".MX" not in ticker_test and rate: rate = rate * usd_now
+                        
+                        # Conversión si el dividendo viene en USD
+                        if ".MX" not in ticker_test and rate: rate = rate * usd_rate
                         
                         if rate: info['div_rate'] = rate
                         if yield_pct: info['div_yield'] = yield_pct
@@ -163,12 +162,22 @@ with st.sidebar:
 df_raw = cargar_datos_google()
 
 if df_raw is not None and not df_raw.empty:
+    # 1. Obtener Dólar en Tiempo Real (Para conversiones)
+    try: 
+        usd_now = yf.Ticker("USDMXN=X").history(period="1d")['Close'].iloc[-1]
+    except: 
+        usd_now = 20.00
+    
+    st.sidebar.metric("Dólar Hoy", f"${usd_now:.2f} MXN")
+
+    # 2. Normalización de columnas
     df_raw.columns = df_raw.columns.str.lower().str.strip()
     mapa_gbm = {
         'emisora': 'Ticker', 'emisora/serie': 'Ticker', 'ticker': 'Ticker',
         'titulos': 'Cantidad', 'títulos': 'Cantidad', 'cantidad': 'Cantidad',
         'costo promedio': 'Costo_Unitario', 'costo': 'Costo_Unitario',
-        'tipo': 'Tipo', 'sector': 'Sector', 'notas': 'Notas'
+        'tipo': 'Tipo', 'sector': 'Sector', 'notas': 'Notas', 
+        'moneda': 'Moneda' # <--- Nueva Columna
     }
     df_raw.rename(columns=mapa_gbm, inplace=True)
     df_raw['Ticker'] = df_raw['Ticker'].astype(str).str.strip()
@@ -180,24 +189,42 @@ if df_raw is not None and not df_raw.empty:
     df_raw['Cantidad'] = df_raw['Cantidad'].apply(clean_money)
     df_raw['Costo_Unitario'] = df_raw['Costo_Unitario'].apply(clean_money)
 
-    for c in ['Tipo','Sector','Notas']: 
+    # Rellenar vacíos
+    for c in ['Tipo','Sector','Notas','Moneda']: 
         if c not in df_raw.columns: df_raw[c] = ""
     df_raw['Sector'] = df_raw['Sector'].replace('', 'General')
     df_raw['Tipo'] = df_raw['Tipo'].replace('', 'General')
+    
+    # 🚨 LÓGICA DE CONVERSIÓN DE COSTO (USD -> MXN) 🚨
+    # Si la columna Moneda dice "USD", multiplicamos el costo por el dólar actual
+    def convertir_a_mxn(row):
+        moneda = str(row['Moneda']).upper().strip()
+        costo = row['Costo_Unitario']
+        if 'USD' in moneda:
+            return costo * usd_now
+        return costo # Si es MXN o vacío, se queda igual
 
-    df_raw['Inversion_Fila'] = df_raw['Cantidad'] * df_raw['Costo_Unitario']
+    df_raw['Costo_Unitario_MXN'] = df_raw.apply(convertir_a_mxn, axis=1)
+
+    # 3. Agrupación usando el Costo ya convertido a Pesos
+    df_raw['Inversion_Fila'] = df_raw['Cantidad'] * df_raw['Costo_Unitario_MXN']
+    
     df = df_raw.groupby('Ticker', as_index=False).agg({
         'Tipo': 'first', 'Sector': 'first', 'Cantidad': 'sum', 
-        'Inversion_Fila': 'sum', 'Notas': 'first'
+        'Inversion_Fila': 'sum', 'Notas': 'first', 'Moneda': 'first'
     })
+    
     df.rename(columns={'Inversion_Fila': 'Inversion_Total_Real'}, inplace=True)
+    # Costo promedio ponderado en PESOS
     df['Costo_Promedio_Real'] = df.apply(lambda x: x['Inversion_Total_Real'] / x['Cantidad'] if x['Cantidad'] > 0 else 0, axis=1)
 
-    mercado = obtener_datos_mercado(df['Ticker'].unique())
+    # 4. Mercado
+    mercado = obtener_datos_mercado(df['Ticker'].unique(), usd_now)
     df['Precio_Actual'] = df['Ticker'].map(lambda x: mercado[x]['precio'])
     df['Div_Rate'] = df['Ticker'].map(lambda x: mercado[x]['div_rate'])
     df['Div_Yield'] = df['Ticker'].map(lambda x: mercado[x]['div_yield']*100)
 
+    # 5. Resultados
     df['Valor_Mercado'] = df['Cantidad'] * df['Precio_Actual']
     df['Ganancia'] = df['Valor_Mercado'] - df['Inversion_Total_Real']
     df['Rend_%'] = df.apply(lambda x: (x['Ganancia']/x['Inversion_Total_Real']*100) if x['Inversion_Total_Real']>0 else 0, axis=1)
@@ -231,8 +258,8 @@ if df_raw is not None and not df_raw.empty:
             st.info(f"No hay activos tipo {titulo}")
 
     with tab1:
-        st.subheader("📈 Evolución Patrimonial")
-        with st.spinner("Conectando..."):
+        st.subheader("📈 Valor Total del Patrimonio")
+        with st.spinner("Analizando divisas y mercado..."):
             historia = generar_grafico_historico(df_real)
         if not historia.empty:
             fig_hist = px.area(historia, y='Valor_Total')
@@ -243,8 +270,8 @@ if df_raw is not None and not df_raw.empty:
         t_val = df_real['Valor_Mercado'].sum()
         t_inv = df_real['Inversion_Total_Real'].sum()
         t_gan = df_real['Ganancia'].sum()
-        k1.metric("Valor Total", f"${t_val:,.2f}")
-        k2.metric("Inversión Total", f"${t_inv:,.2f}")
+        k1.metric("Patrimonio Total", f"${t_val:,.2f}")
+        k2.metric("Costo Total (MXN)", f"${t_inv:,.2f}", help="Suma de costos convertidos a Pesos")
         k3.metric("Plusvalía", f"${t_gan:,.2f}", delta=f"{(t_gan/t_inv*100):.2f}%" if t_inv>0 else "0%")
         st.markdown("---")
         
@@ -253,24 +280,13 @@ if df_raw is not None and not df_raw.empty:
         with c2: bloque_activo(df_real, "BMV", "BMV")
         with c3: bloque_activo(df_real, "ETFs", "ETF")
 
-        # 🚨 AQUÍ ESTÁ EL HEATMAP RESTAURADO AL FINAL DE LA PÁGINA PRINCIPAL 🚨
         st.markdown("---")
-        st.subheader("🔥 Mapa de Calor del Mercado (Heatmap)")
-        
+        st.subheader("🔥 Mapa de Calor del Mercado")
         if not df_real.empty:
-            fig_tree = px.treemap(
-                df_real, 
-                path=['Tipo', 'Sector', 'Ticker'], 
-                values='Valor_Mercado',
-                color='Rend_%',
-                color_continuous_scale=['#FF4B4B', '#1E1E1E', '#00CC96'], # Rojo - Negro - Verde
-                color_continuous_midpoint=0,
-                custom_data=['Precio_Actual', 'Ganancia', 'Rend_%']
-            )
-            fig_tree.update_traces(
-                textinfo="label+value+percent entry",
-                hovertemplate="<b>%{label}</b><br>Valor: $%{value:,.2f}<br>Rend: %{customdata[2]:.2f}%"
-            )
+            fig_tree = px.treemap(df_real, path=['Tipo', 'Sector', 'Ticker'], values='Valor_Mercado',
+                color='Rend_%', color_continuous_scale=['#FF4B4B', '#1E1E1E', '#00CC96'], color_continuous_midpoint=0,
+                custom_data=['Precio_Actual', 'Ganancia', 'Rend_%'])
+            fig_tree.update_traces(textinfo="label+value+percent entry", hovertemplate="<b>%{label}</b><br>$%{value:,.2f}<br>%{customdata[2]:.2f}%")
             fig_tree.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=400)
             st.plotly_chart(fig_tree, use_container_width=True)
 
