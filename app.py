@@ -8,7 +8,7 @@ from datetime import datetime
 import pytz # <--- LIBRERÍA DE ZONAS HORARIAS
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Pro V29", layout="wide", page_icon="💹​")
+st.set_page_config(page_title="🚀 Pro V29", layout="wide", page_icon="💹​")
 
 # --- 🔐 LOGIN ---
 def check_password():
@@ -338,5 +338,6 @@ if df_raw is not None and not df_raw.empty:
 
 else:
     st.info("Cargando sistema...")
+
 
 
