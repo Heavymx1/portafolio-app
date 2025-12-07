@@ -6,14 +6,14 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="DASHBOARD PRO", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Terminal Pro V8", layout="wide", page_icon="🦁")
 st.markdown("""
     <style>
     .stMetric {background-color: #1E1E1E; border: 1px solid #333; padding: 15px; border-radius: 10px;}
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Maestra")
+st.title("🦁 Terminal Patrimonial: Corrector Inteligente")
 
 # --- CONEXIÓN ---
 # 👇👇👇 ¡TU LINK AQUÍ! 👇👇👇
@@ -36,19 +36,27 @@ def cargar_datos():
         st.error(f"Error conexión: {e}")
         return None
 
-# --- MOTOR DE DATOS ---
+# --- MOTOR DE DATOS (CON LIMPIEZA DE TICKERS) ---
 def obtener_datos_mercado(tickers):
     data_dict = {}
     progreso = st.progress(0)
     
-    for i, t in enumerate(tickers):
-        t = str(t).strip()
+    for i, t_original in enumerate(tickers):
+        # 🚨 LIMPIEZA DE TICKER 🚨
+        # Quitamos asteriscos, " N", y espacios extra
+        t_clean = str(t_original).replace('*', '').replace(' N', '').strip()
+        
         info = {'precio': 0, 'div_rate': 0, 'div_yield': 0}
+        
         try:
-            stock = yf.Ticker(t + ".MX")
+            # 1. Intentamos buscar en MÉXICO primero (.MX)
+            # Esto es vital para que el precio esté en PESOS (SIC)
+            stock = yf.Ticker(t_clean + ".MX")
             hist = stock.history(period="1d")
+            
+            # 2. Si falla en México, buscamos en EE.UU. (Directo)
             if hist.empty:
-                stock = yf.Ticker(t)
+                stock = yf.Ticker(t_clean)
                 hist = stock.history(period="1d")
             
             if not hist.empty:
@@ -60,7 +68,9 @@ def obtener_datos_mercado(tickers):
                     if info['div_yield'] is None: info['div_yield'] = 0
                 except: pass
         except: pass  
-        data_dict[t] = info
+        
+        # Guardamos la info usando el nombre original para que coincida con tu Excel
+        data_dict[t_original] = info
         progreso.progress((i + 1) / len(tickers))
     
     progreso.empty()
@@ -74,13 +84,13 @@ if st.button('🔄 Recargar Mercado'):
 df_raw = cargar_datos()
 
 if df_raw is not None and not df_raw.empty:
-    # 1. Limpieza
+    # 1. Limpieza Columnas
     df_raw.columns = df_raw.columns.str.lower().str.strip()
     mapa = {'emisora': 'ticker', 'titulos': 'cantidad', 'costo promedio': 'costo', 'sector': 'sector', 'tipo': 'tipo'}
     df_raw.rename(columns=mapa, inplace=True)
     df_raw.columns = df_raw.columns.str.capitalize()
     
-    # 2. Sanitizar
+    # 2. Sanitizar Números
     def limpiar_num(x):
         try: return float(str(x).replace('$','').replace(',','').strip())
         except: return 0.0
@@ -92,19 +102,24 @@ if df_raw is not None and not df_raw.empty:
 
     # 3. Agrupación (Consolidar Tickers Duplicados)
     df_raw['Inversion_Total'] = df_raw['Cantidad'] * df_raw['Costo']
+    
+    # Agrupamos por Ticker exacto como viene del Excel
     df = df_raw.groupby('Ticker', as_index=False).agg({
         'Tipo': 'first',
         'Sector': 'first',
         'Cantidad': 'sum',
         'Inversion_Total': 'sum'
     })
-    df['Costo'] = df['Inversion_Total'] / df['Cantidad']
+    
+    # Recalcular costo promedio ponderado
+    # Evitamos división por cero
+    df['Costo'] = df.apply(lambda x: x['Inversion_Total'] / x['Cantidad'] if x['Cantidad'] > 0 else 0, axis=1)
 
     # 4. Descargar Mercado
-    with st.spinner('Actualizando precios y dividendos...'):
+    with st.spinner('Limpiando tickers y descargando precios...'):
         mercado = obtener_datos_mercado(df['Ticker'].unique())
 
-    # 5. Cálculos
+    # 5. Cálculos Finales
     df['Precio_Actual'] = df['Ticker'].map(lambda x: mercado[x]['precio'])
     df['Div_Pago_Accion'] = df['Ticker'].map(lambda x: mercado[x]['div_rate'])
     df['Div_Yield_%'] = df['Ticker'].map(lambda x: mercado[x]['div_yield'] * 100 if mercado[x]['div_yield'] else 0)
@@ -112,16 +127,17 @@ if df_raw is not None and not df_raw.empty:
     df['Valor_Mercado'] = df['Cantidad'] * df['Precio_Actual']
     df['Costo_Total'] = df['Cantidad'] * df['Costo']
     df['Ganancia'] = df['Valor_Mercado'] - df['Costo_Total']
+    
+    # Rendimiento % seguro
     df['Rendimiento_%'] = df.apply(lambda x: (x['Ganancia']/x['Costo_Total']*100) if x['Costo_Total']>0 else 0, axis=1)
     
-    # --- CÁLCULOS NUEVOS DE DIVIDENDOS ---
+    # Dividendos
     df['Pago_Anual_Total'] = df['Cantidad'] * df['Div_Pago_Accion']
-    df['Pago_Mensual_Est'] = df['Pago_Anual_Total'] / 12  # <--- NUEVO: Promedio Mensual
+    df['Pago_Mensual_Est'] = df['Pago_Anual_Total'] / 12 
 
     # --- PESTAÑAS ---
     tab_dash, tab_divs = st.tabs(["📊 Dashboard Consolidado", "💸 Estrategia de Dividendos"])
 
-    # Estilos de color (Sin gradientes locos)
     def color_fondo(val):
         color = '#113311' if val >= 0 else '#331111' 
         return f'background-color: {color}'
@@ -130,7 +146,6 @@ if df_raw is not None and not df_raw.empty:
     # PESTAÑA 1: DASHBOARD
     # ==========================
     with tab_dash:
-        # KPIs
         k1, k2, k3 = st.columns(3)
         k1.metric("Patrimonio Total", f"${df['Valor_Mercado'].sum():,.2f}")
         k2.metric("Ganancia Total", f"${df['Ganancia'].sum():,.2f}", delta=f"{df['Ganancia'].sum():,.2f}")
@@ -139,7 +154,6 @@ if df_raw is not None and not df_raw.empty:
         
         st.markdown("---")
         
-        # Gráficos
         c_sic, c_bmv = st.columns(2)
         with c_sic:
             st.header("🌍 SIC")
@@ -156,6 +170,7 @@ if df_raw is not None and not df_raw.empty:
 
         st.subheader("📋 Resumen Consolidado")
         cols_show = ['Ticker', 'Tipo', 'Cantidad', 'Costo', 'Precio_Actual', 'Ganancia', 'Rendimiento_%']
+        
         st.dataframe(
             df[cols_show].style.format({
                 'Costo': "${:,.2f}", 'Precio_Actual': "${:,.2f}", 
@@ -165,27 +180,23 @@ if df_raw is not None and not df_raw.empty:
         )
 
     # ==========================
-    # PESTAÑA 2: DIVIDENDOS (MEJORADA)
+    # PESTAÑA 2: DIVIDENDOS
     # ==========================
     with tab_divs:
         st.subheader("💰 Flujo de Efectivo (Cashflow)")
         
-        # Filtramos solo las que pagan
         df_divs = df[df['Pago_Anual_Total'] > 0].copy()
         
-        # 1. KPIs DE DIVIDENDOS
         total_anual = df_divs['Pago_Anual_Total'].sum()
         total_mensual = df_divs['Pago_Mensual_Est'].sum()
-        capital_generador = df_divs['Valor_Mercado'].sum() # Cuánto dinero tienes trabajando en dividendos
+        capital_generador = df_divs['Valor_Mercado'].sum()
         
         col_d1, col_d2, col_d3 = st.columns(3)
         col_d1.metric("Ingreso Anual (Proyectado)", f"${total_anual:,.2f}")
         col_d2.metric("Ingreso Mensual (Promedio)", f"${total_mensual:,.2f}", delta="Disponible al mes")
-        col_d3.metric("Capital Generador", f"${capital_generador:,.2f}", help="Valor total de las acciones que te pagan dividendos")
+        col_d3.metric("Capital Generador", f"${capital_generador:,.2f}")
 
         st.markdown("---")
-        
-        # 2. TABLA DETALLADA CON MENSUALIDAD
         st.markdown("#### 📅 Desglose de Pagos")
         
         cols_divs = ['Ticker', 'Cantidad', 'Div_Yield_%', 'Pago_Anual_Total', 'Pago_Mensual_Est']
@@ -196,15 +207,14 @@ if df_raw is not None and not df_raw.empty:
             .format({
                 'Div_Yield_%': "{:.2f}%",
                 'Pago_Anual_Total': "${:,.2f}",
-                'Pago_Mensual_Est': "${:,.2f}" # <--- Nueva Columna Formateada
+                'Pago_Mensual_Est': "${:,.2f}"
             })
-            .bar(subset=['Pago_Mensual_Est'], color='#00CC96'), # Barra visual para ver cuál paga más
+            .bar(subset=['Pago_Mensual_Est'], color='#00CC96'),
             use_container_width=True
         )
         
         if df_divs.empty:
-            st.info("Actualmente tus acciones no reportan dividendos en Yahoo Finance.")
+            st.info("No se detectaron dividendos. (Verifica que Yahoo Finance tenga datos para tus acciones)")
 
 else:
     st.info("Cargando portafolio...")
-
