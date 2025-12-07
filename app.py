@@ -7,30 +7,26 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Terminal Pro V24", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Terminal Pro V26", layout="wide", page_icon="🦁")
 
-# --- 🔐 SISTEMA DE LOGIN ---
+# --- 🔐 LOGIN ---
 def check_password():
     if st.session_state.get("password_correct", False):
         return True
-
     st.markdown("""<style>.stTextInput>div>div>input {text-align: center; font-size: 20px;}</style>""", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.write("### 🦁 Acceso Restringido")
         pwd = st.text_input("Contraseña:", type="password")
-        if pwd:
-            if pwd == st.secrets["PASSWORD"]:
-                st.session_state["password_correct"] = True
-                st.rerun()
-            else:
-                st.error("❌ Incorrecto")
+        if pwd == st.secrets["PASSWORD"]:
+            st.session_state["password_correct"] = True
+            st.rerun()
     return False
 
 if not check_password(): st.stop()
 
 # ==========================================
-# 🚀 INICIO DEL DASHBOARD
+# 🚀 DASHBOARD
 # ==========================================
 
 st.markdown("""
@@ -40,7 +36,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Dividendos Corregidos")
+st.title("🦁 Terminal Patrimonial: Heatmap Activo")
 
 URL_HOJA = st.secrets["SHEET_URL"]
 
@@ -52,7 +48,6 @@ def cargar_datos_google():
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
         else:
             creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
-        
         client = gspread.authorize(creds)
         sh = client.open_by_url(URL_HOJA)
         return pd.DataFrame(sh.sheet1.get_all_records()).astype(str)
@@ -60,7 +55,7 @@ def cargar_datos_google():
         st.error(f"Error Google Sheets: {e}")
         return None
 
-# --- MOTOR DE HISTORIA ---
+# --- HISTORIA ---
 @st.cache_data(ttl=300)
 def generar_grafico_historico(df_real):
     try: hist_usd = yf.Ticker("USDMXN=X").history(period="6mo")['Close']
@@ -81,7 +76,6 @@ def generar_grafico_historico(df_real):
         qty = row['Cantidad']
         t_clean = str(t).replace('*', '').replace(' N', '').strip()
         t_busqueda = CORRECCIONES.get(t_clean, t_clean)
-        
         try:
             hist = yf.Ticker(t_busqueda + ".MX").history(period="6mo")['Close']
             es_mxn = True
@@ -97,7 +91,7 @@ def generar_grafico_historico(df_real):
         except: pass
     return df_historia
 
-# --- MOTOR DE PRECIOS & DIVIDENDOS (MEJORADO) ---
+# --- MERCADO ---
 def obtener_datos_mercado(tickers):
     data_dict = {}
     try: usd_now = yf.Ticker("USDMXN=X").history(period="1d")['Close'].iloc[-1]
@@ -108,7 +102,8 @@ def obtener_datos_mercado(tickers):
         'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD', 'XRP': 'XRP-USD',
         'ASUR B': 'ASURB.MX', 'VOLAR A': 'VOLARA.MX', 'FIBRAPL 14': 'FIBRAPL14.MX',
         'FIBRAMQ 12': 'FIBRAMQ12.MX', 'GAP B': 'GAPB.MX', 'OMA B': 'OMAB.MX',
-        'FUNO 11': 'FUNO11.MX', 'DANHOS 13': 'DANHOS13.MX'
+        'FUNO 11': 'FUNO11.MX', 'DANHOS 13': 'DANHOS13.MX', 'CEMEXCPO': 'CEMEXCPO.MX',
+        'BIMBO A': 'BIMBOA.MX', 'WALMEX *': 'WALMEX.MX'
     }
     
     for t_original in tickers:
@@ -120,11 +115,9 @@ def obtener_datos_mercado(tickers):
             t_busqueda = t_clean.replace('*', '').replace(' N', '').strip()
 
         candidatos = [t_busqueda]
-        if ".MX" not in t_busqueda and "-USD" not in t_busqueda: 
-            candidatos.append(t_busqueda + ".MX")
+        if ".MX" not in t_busqueda and "-USD" not in t_busqueda: candidatos.append(t_busqueda + ".MX")
         sin_espacios = t_busqueda.replace(" ", "") + ".MX"
-        if sin_espacios not in candidatos and "-USD" not in t_busqueda:
-            candidatos.append(sin_espacios)
+        if sin_espacios not in candidatos and "-USD" not in t_busqueda: candidatos.append(sin_espacios)
 
         encontrado = False
         for ticker_test in candidatos:
@@ -136,34 +129,20 @@ def obtener_datos_mercado(tickers):
                     encontrado = True
                     precio_nativo = hist['Close'].iloc[-1]
                     
-                    # 1. PRECIO
                     if ".MX" in ticker_test: info['precio'] = precio_nativo
                     else: info['precio'] = precio_nativo * usd_now
                     
-                    # 2. DIVIDENDOS (ESTRATEGIA TRIPLE) 🚑
                     try:
-                        # Intento A: Rate directo
                         rate = stock.info.get('dividendRate', 0)
-                        
-                        # Intento B: Trailing Annual Rate (A veces Yahoo lo mueve aquí)
-                        if rate is None or rate == 0:
-                             rate = stock.info.get('trailingAnnualDividendRate', 0)
-
-                        # Intento C: Yield * Precio Nativo (Cálculo Manual)
                         yield_pct = stock.info.get('dividendYield', 0)
                         if (rate is None or rate == 0) and (yield_pct and yield_pct > 0):
                             rate = precio_nativo * yield_pct
+                        if (rate is None or rate == 0):
+                             rate = stock.info.get('trailingAnnualDividendRate', 0)
+                        if ".MX" not in ticker_test and rate: rate = rate * usd_now
                         
-                        # Limpieza de None
-                        if rate is None: rate = 0
-                        if yield_pct is None: yield_pct = 0
-                        
-                        # Conversión de Moneda para el Dividendo
-                        if ".MX" not in ticker_test: 
-                            rate = rate * usd_now # Si paga en USD, conviértelo a MXN
-                            
-                        info['div_rate'] = rate
-                        info['div_yield'] = yield_pct
+                        if rate: info['div_rate'] = rate
+                        if yield_pct: info['div_yield'] = yield_pct
                     except: pass
             except: pass
         data_dict[t_original] = info
@@ -180,11 +159,10 @@ with st.sidebar:
         st.rerun()
     st.caption(f"Actualizado: {datetime.now().strftime('%H:%M:%S')}")
 
-# --- LÓGICA PRINCIPAL ---
+# --- PROCESO ---
 df_raw = cargar_datos_google()
 
 if df_raw is not None and not df_raw.empty:
-    # 1. NORMALIZACIÓN
     df_raw.columns = df_raw.columns.str.lower().str.strip()
     mapa_gbm = {
         'emisora': 'Ticker', 'emisora/serie': 'Ticker', 'ticker': 'Ticker',
@@ -193,9 +171,8 @@ if df_raw is not None and not df_raw.empty:
         'tipo': 'Tipo', 'sector': 'Sector', 'notas': 'Notas'
     }
     df_raw.rename(columns=mapa_gbm, inplace=True)
-    
-    # 2. LIMPIEZA
     df_raw['Ticker'] = df_raw['Ticker'].astype(str).str.strip()
+    
     def clean_money(x): 
         try: return float(str(x).replace('$','').replace(',','').strip())
         except: return 0.0
@@ -205,28 +182,22 @@ if df_raw is not None and not df_raw.empty:
 
     for c in ['Tipo','Sector','Notas']: 
         if c not in df_raw.columns: df_raw[c] = ""
-    
     df_raw['Sector'] = df_raw['Sector'].replace('', 'General')
     df_raw['Tipo'] = df_raw['Tipo'].replace('', 'General')
 
-    # 3. AGRUPACIÓN
     df_raw['Inversion_Fila'] = df_raw['Cantidad'] * df_raw['Costo_Unitario']
-    
     df = df_raw.groupby('Ticker', as_index=False).agg({
         'Tipo': 'first', 'Sector': 'first', 'Cantidad': 'sum', 
         'Inversion_Fila': 'sum', 'Notas': 'first'
     })
-    
     df.rename(columns={'Inversion_Fila': 'Inversion_Total_Real'}, inplace=True)
     df['Costo_Promedio_Real'] = df.apply(lambda x: x['Inversion_Total_Real'] / x['Cantidad'] if x['Cantidad'] > 0 else 0, axis=1)
 
-    # 4. MERCADO
     mercado = obtener_datos_mercado(df['Ticker'].unique())
     df['Precio_Actual'] = df['Ticker'].map(lambda x: mercado[x]['precio'])
     df['Div_Rate'] = df['Ticker'].map(lambda x: mercado[x]['div_rate'])
     df['Div_Yield'] = df['Ticker'].map(lambda x: mercado[x]['div_yield']*100)
 
-    # 5. RESULTADOS
     df['Valor_Mercado'] = df['Cantidad'] * df['Precio_Actual']
     df['Ganancia'] = df['Valor_Mercado'] - df['Inversion_Total_Real']
     df['Rend_%'] = df.apply(lambda x: (x['Ganancia']/x['Inversion_Total_Real']*100) if x['Inversion_Total_Real']>0 else 0, axis=1)
@@ -260,8 +231,8 @@ if df_raw is not None and not df_raw.empty:
             st.info(f"No hay activos tipo {titulo}")
 
     with tab1:
-        st.subheader("📈 Valor Total del Patrimonio")
-        with st.spinner("Analizando..."):
+        st.subheader("📈 Evolución Patrimonial")
+        with st.spinner("Conectando..."):
             historia = generar_grafico_historico(df_real)
         if not historia.empty:
             fig_hist = px.area(historia, y='Valor_Total')
@@ -272,14 +243,36 @@ if df_raw is not None and not df_raw.empty:
         t_val = df_real['Valor_Mercado'].sum()
         t_inv = df_real['Inversion_Total_Real'].sum()
         t_gan = df_real['Ganancia'].sum()
-        k1.metric("Patrimonio Total", f"${t_val:,.2f}")
-        k2.metric("Costo Total", f"${t_inv:,.2f}")
+        k1.metric("Valor Total", f"${t_val:,.2f}")
+        k2.metric("Inversión Total", f"${t_inv:,.2f}")
         k3.metric("Plusvalía", f"${t_gan:,.2f}", delta=f"{(t_gan/t_inv*100):.2f}%" if t_inv>0 else "0%")
         st.markdown("---")
+        
         c1, c2, c3 = st.columns(3)
         with c1: bloque_activo(df_real, "SIC", "SIC")
         with c2: bloque_activo(df_real, "BMV", "BMV")
         with c3: bloque_activo(df_real, "ETFs", "ETF")
+
+        # 🚨 AQUÍ ESTÁ EL HEATMAP RESTAURADO AL FINAL DE LA PÁGINA PRINCIPAL 🚨
+        st.markdown("---")
+        st.subheader("🔥 Mapa de Calor del Mercado (Heatmap)")
+        
+        if not df_real.empty:
+            fig_tree = px.treemap(
+                df_real, 
+                path=['Tipo', 'Sector', 'Ticker'], 
+                values='Valor_Mercado',
+                color='Rend_%',
+                color_continuous_scale=['#FF4B4B', '#1E1E1E', '#00CC96'], # Rojo - Negro - Verde
+                color_continuous_midpoint=0,
+                custom_data=['Precio_Actual', 'Ganancia', 'Rend_%']
+            )
+            fig_tree.update_traces(
+                textinfo="label+value+percent entry",
+                hovertemplate="<b>%{label}</b><br>Valor: $%{value:,.2f}<br>Rend: %{customdata[2]:.2f}%"
+            )
+            fig_tree.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=400)
+            st.plotly_chart(fig_tree, use_container_width=True)
 
     with tab2:
         st.header("🌍 Mercado Internacional y Digital")
@@ -288,7 +281,7 @@ if df_raw is not None and not df_raw.empty:
         with col_crypto: bloque_activo(df_real, "₿ Criptomonedas", "CRYPTO")
 
     with tab3:
-        d = df_real[df_real['Pago_Anual'] > 0.1].copy() # Filtro > 0.1 pesos para limpiar basura
+        d = df_real[df_real['Pago_Anual'] > 0.01].copy()
         if not d.empty:
             c1, c2 = st.columns(2)
             c1.metric("Ingreso Anual", f"${d['Pago_Anual'].sum():,.2f}")
@@ -296,7 +289,7 @@ if df_raw is not None and not df_raw.empty:
             st.dataframe(d[['Ticker','Div_Yield','Pago_Mensual','Pago_Anual']].sort_values('Pago_Mensual', ascending=False)
                          .style.format({'Div_Yield': "{:.2f}%", 'Pago_Mensual': "${:,.2f}", 'Pago_Anual': "${:,.2f}"})
                          .bar(subset=['Pago_Mensual'], color='#00CC96'), use_container_width=True)
-        else: st.info("No se detectaron dividendos (o Yahoo Finance no los reporta para estos activos).")
+        else: st.info("No se detectaron dividendos.")
 
 else:
     st.info("Cargando sistema...")
