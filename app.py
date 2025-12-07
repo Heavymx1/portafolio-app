@@ -6,14 +6,14 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Terminal Pro V8", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Terminal Pro V9", layout="wide", page_icon="🦁")
 st.markdown("""
     <style>
     .stMetric {background-color: #1E1E1E; border: 1px solid #333; padding: 15px; border-radius: 10px;}
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Corrector Inteligente")
+st.title("🦁 Terminal Patrimonial: Multi-Activos")
 
 # --- CONEXIÓN ---
 # 👇👇👇 ¡TU LINK AQUÍ! 👇👇👇
@@ -36,25 +36,23 @@ def cargar_datos():
         st.error(f"Error conexión: {e}")
         return None
 
-# --- MOTOR DE DATOS (CON LIMPIEZA DE TICKERS) ---
+# --- MOTOR DE DATOS (LIMPIEZA PARA ETFS Y ACCIONES) ---
 def obtener_datos_mercado(tickers):
     data_dict = {}
     progreso = st.progress(0)
     
     for i, t_original in enumerate(tickers):
-        # 🚨 LIMPIEZA DE TICKER 🚨
-        # Quitamos asteriscos, " N", y espacios extra
+        # 🚨 LIMPIEZA TOTAL: Esto arregla "AMZN N", "CSCO *" y también ETFs raros
         t_clean = str(t_original).replace('*', '').replace(' N', '').strip()
         
         info = {'precio': 0, 'div_rate': 0, 'div_yield': 0}
         
         try:
-            # 1. Intentamos buscar en MÉXICO primero (.MX)
-            # Esto es vital para que el precio esté en PESOS (SIC)
+            # 1. Prioridad México (.MX) para tener precios en PESOS
             stock = yf.Ticker(t_clean + ".MX")
             hist = stock.history(period="1d")
             
-            # 2. Si falla en México, buscamos en EE.UU. (Directo)
+            # 2. Si falla, busca en EE.UU.
             if hist.empty:
                 stock = yf.Ticker(t_clean)
                 hist = stock.history(period="1d")
@@ -69,7 +67,6 @@ def obtener_datos_mercado(tickers):
                 except: pass
         except: pass  
         
-        # Guardamos la info usando el nombre original para que coincida con tu Excel
         data_dict[t_original] = info
         progreso.progress((i + 1) / len(tickers))
     
@@ -100,23 +97,18 @@ if df_raw is not None and not df_raw.empty:
     if 'Tipo' not in df_raw.columns: df_raw['Tipo'] = "General"
     if 'Sector' not in df_raw.columns: df_raw['Sector'] = "Otros"
 
-    # 3. Agrupación (Consolidar Tickers Duplicados)
+    # 3. Agrupación Inteligente
     df_raw['Inversion_Total'] = df_raw['Cantidad'] * df_raw['Costo']
-    
-    # Agrupamos por Ticker exacto como viene del Excel
     df = df_raw.groupby('Ticker', as_index=False).agg({
         'Tipo': 'first',
         'Sector': 'first',
         'Cantidad': 'sum',
         'Inversion_Total': 'sum'
     })
-    
-    # Recalcular costo promedio ponderado
-    # Evitamos división por cero
     df['Costo'] = df.apply(lambda x: x['Inversion_Total'] / x['Cantidad'] if x['Cantidad'] > 0 else 0, axis=1)
 
     # 4. Descargar Mercado
-    with st.spinner('Limpiando tickers y descargando precios...'):
+    with st.spinner('Analizando Acciones y ETFs...'):
         mercado = obtener_datos_mercado(df['Ticker'].unique())
 
     # 5. Cálculos Finales
@@ -127,25 +119,22 @@ if df_raw is not None and not df_raw.empty:
     df['Valor_Mercado'] = df['Cantidad'] * df['Precio_Actual']
     df['Costo_Total'] = df['Cantidad'] * df['Costo']
     df['Ganancia'] = df['Valor_Mercado'] - df['Costo_Total']
-    
-    # Rendimiento % seguro
     df['Rendimiento_%'] = df.apply(lambda x: (x['Ganancia']/x['Costo_Total']*100) if x['Costo_Total']>0 else 0, axis=1)
-    
-    # Dividendos
     df['Pago_Anual_Total'] = df['Cantidad'] * df['Div_Pago_Accion']
     df['Pago_Mensual_Est'] = df['Pago_Anual_Total'] / 12 
 
-    # --- PESTAÑAS ---
-    tab_dash, tab_divs = st.tabs(["📊 Dashboard Consolidado", "💸 Estrategia de Dividendos"])
+    # --- VISUALIZACIÓN ---
+    tab_dash, tab_divs = st.tabs(["📊 Dashboard General", "💸 Dividendos"])
 
     def color_fondo(val):
         color = '#113311' if val >= 0 else '#331111' 
         return f'background-color: {color}'
 
     # ==========================
-    # PESTAÑA 1: DASHBOARD
+    # PESTAÑA 1: DASHBOARD (AHORA CON 3 COLUMNAS)
     # ==========================
     with tab_dash:
+        # KPIs Globales
         k1, k2, k3 = st.columns(3)
         k1.metric("Patrimonio Total", f"${df['Valor_Mercado'].sum():,.2f}")
         k2.metric("Ganancia Total", f"${df['Ganancia'].sum():,.2f}", delta=f"{df['Ganancia'].sum():,.2f}")
@@ -154,19 +143,43 @@ if df_raw is not None and not df_raw.empty:
         
         st.markdown("---")
         
-        c_sic, c_bmv = st.columns(2)
-        with c_sic:
+        # 🚨 AQUÍ ESTÁ EL CAMBIO: 3 COLUMNAS 🚨
+        col_sic, col_bmv, col_etf = st.columns(3)
+        
+        # --- COLUMNA 1: SIC (Internacional) ---
+        with col_sic:
             st.header("🌍 SIC")
             df_sic = df[df['Tipo'].str.upper().str.contains('SIC')]
             if not df_sic.empty:
-                st.metric("Valor SIC", f"${df_sic['Valor_Mercado'].sum():,.2f}")
+                st.metric("Total SIC", f"${df_sic['Valor_Mercado'].sum():,.2f}")
                 st.plotly_chart(px.sunburst(df_sic, path=['Sector', 'Ticker'], values='Valor_Mercado'), use_container_width=True)
-        with c_bmv:
+                st.plotly_chart(px.bar(df_sic, x='Ganancia', y='Ticker', orientation='h', color='Ganancia', color_continuous_scale='RdYlGn'), use_container_width=True)
+            else:
+                st.info("Sin acciones tipo SIC")
+
+        # --- COLUMNA 2: BMV (Nacional) ---
+        with col_bmv:
             st.header("🇲🇽 BMV")
             df_bmv = df[df['Tipo'].str.upper().str.contains('BMV')]
             if not df_bmv.empty:
-                st.metric("Valor BMV", f"${df_bmv['Valor_Mercado'].sum():,.2f}")
+                st.metric("Total BMV", f"${df_bmv['Valor_Mercado'].sum():,.2f}")
                 st.plotly_chart(px.sunburst(df_bmv, path=['Sector', 'Ticker'], values='Valor_Mercado'), use_container_width=True)
+                st.plotly_chart(px.bar(df_bmv, x='Ganancia', y='Ticker', orientation='h', color='Ganancia', color_continuous_scale='RdYlGn'), use_container_width=True)
+            else:
+                st.info("Sin acciones tipo BMV")
+
+        # --- COLUMNA 3: ETFs (Fondos) ---
+        with col_etf:
+            st.header("🛡️ ETFs")
+            df_etf = df[df['Tipo'].str.upper().str.contains('ETF')]
+            if not df_etf.empty:
+                st.metric("Total ETFs", f"${df_etf['Valor_Mercado'].sum():,.2f}")
+                # Gráfico Solar para ETFs
+                st.plotly_chart(px.sunburst(df_etf, path=['Ticker'], values='Valor_Mercado'), use_container_width=True)
+                # Barras para ETFs
+                st.plotly_chart(px.bar(df_etf, x='Ganancia', y='Ticker', orientation='h', color='Ganancia', color_continuous_scale='RdYlGn'), use_container_width=True)
+            else:
+                st.info("Sin activos tipo ETF")
 
         st.subheader("📋 Resumen Consolidado")
         cols_show = ['Ticker', 'Tipo', 'Cantidad', 'Costo', 'Precio_Actual', 'Ganancia', 'Rendimiento_%']
@@ -183,38 +196,26 @@ if df_raw is not None and not df_raw.empty:
     # PESTAÑA 2: DIVIDENDOS
     # ==========================
     with tab_divs:
-        st.subheader("💰 Flujo de Efectivo (Cashflow)")
-        
+        st.subheader("💰 Flujo de Efectivo")
         df_divs = df[df['Pago_Anual_Total'] > 0].copy()
         
-        total_anual = df_divs['Pago_Anual_Total'].sum()
-        total_mensual = df_divs['Pago_Mensual_Est'].sum()
-        capital_generador = df_divs['Valor_Mercado'].sum()
-        
-        col_d1, col_d2, col_d3 = st.columns(3)
-        col_d1.metric("Ingreso Anual (Proyectado)", f"${total_anual:,.2f}")
-        col_d2.metric("Ingreso Mensual (Promedio)", f"${total_mensual:,.2f}", delta="Disponible al mes")
-        col_d3.metric("Capital Generador", f"${capital_generador:,.2f}")
+        if not df_divs.empty:
+            t_anual = df_divs['Pago_Anual_Total'].sum()
+            t_mensual = df_divs['Pago_Mensual_Est'].sum()
+            
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Ingreso Anual", f"${t_anual:,.2f}")
+            d2.metric("Ingreso Mensual", f"${t_mensual:,.2f}")
+            d3.metric("Capital Generador", f"${df_divs['Valor_Mercado'].sum():,.2f}")
 
-        st.markdown("---")
-        st.markdown("#### 📅 Desglose de Pagos")
-        
-        cols_divs = ['Ticker', 'Cantidad', 'Div_Yield_%', 'Pago_Anual_Total', 'Pago_Mensual_Est']
-        
-        st.dataframe(
-            df_divs.sort_values('Pago_Mensual_Est', ascending=False)[cols_divs]
-            .style
-            .format({
-                'Div_Yield_%': "{:.2f}%",
-                'Pago_Anual_Total': "${:,.2f}",
-                'Pago_Mensual_Est': "${:,.2f}"
-            })
-            .bar(subset=['Pago_Mensual_Est'], color='#00CC96'),
-            use_container_width=True
-        )
-        
-        if df_divs.empty:
-            st.info("No se detectaron dividendos. (Verifica que Yahoo Finance tenga datos para tus acciones)")
+            st.dataframe(
+                df_divs.sort_values('Pago_Mensual_Est', ascending=False)[['Ticker', 'Tipo', 'Div_Yield_%', 'Pago_Mensual_Est']]
+                .style.format({'Div_Yield_%': "{:.2f}%", 'Pago_Mensual_Est': "${:,.2f}"})
+                .bar(subset=['Pago_Mensual_Est'], color='#00CC96'),
+                use_container_width=True
+            )
+        else:
+            st.info("No hay dividendos reportados.")
 
 else:
     st.info("Cargando portafolio...")
