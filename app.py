@@ -8,7 +8,7 @@ from datetime import datetime
 import pytz # <--- LIBRERÍA DE ZONAS HORARIAS
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Terminal Pro V29", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Pro V29", layout="wide", page_icon="💹​")
 
 # --- 🔐 LOGIN ---
 def check_password():
@@ -37,7 +37,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Wall Street Time")
+st.title("💵​ Wall Street Time 💵")
 
 URL_HOJA = st.secrets["SHEET_URL"]
 
@@ -338,3 +338,4 @@ if df_raw is not None and not df_raw.empty:
 
 else:
     st.info("Cargando sistema...")
+
