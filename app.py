@@ -7,7 +7,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Terminal Pro V21", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Terminal Pro V22", layout="wide", page_icon="🦁")
 st.markdown("""
     <style>
     .stMetric {background-color: #1E1E1E; border: 1px solid #333; padding: 10px; border-radius: 8px;}
@@ -15,7 +15,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Multi-Activos")
+st.title("🦁 Terminal Patrimonial: Sectores Corregidos")
 
 # --- CONEXIÓN ---
 # 👇👇👇 ¡TU LINK AQUÍ! 👇👇👇
@@ -41,7 +41,6 @@ def cargar_datos_google():
 # --- MOTOR DE HISTORIA ---
 @st.cache_data(ttl=300)
 def generar_grafico_historico(df_real):
-    # Dólar para conversiones
     try: hist_usd = yf.Ticker("USDMXN=X").history(period="6mo")['Close']
     except: 
         fechas = pd.date_range(end=datetime.now(), periods=180)
@@ -50,7 +49,6 @@ def generar_grafico_historico(df_real):
     df_historia = pd.DataFrame(index=hist_usd.index)
     df_historia['Valor_Total'] = 0.0
     
-    # DICCIONARIO AMPLIADO (ETFs + Cripto + MX)
     CORRECCIONES = {
         'SPYL': 'SPLG', 'IVVPESO': 'IVVPESO.MX', 'NAFTRAC': 'NAFTRAC.MX',
         'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD', 'XRP': 'XRP-USD',
@@ -64,7 +62,6 @@ def generar_grafico_historico(df_real):
         t_busqueda = CORRECCIONES.get(t_clean, t_clean)
         
         try:
-            # Lógica: Intentar MX -> Intentar Directo (US/Cripto)
             hist = yf.Ticker(t_busqueda + ".MX").history(period="6mo")['Close']
             es_mxn = True
             if hist.empty:
@@ -88,23 +85,23 @@ def obtener_datos_mercado(tickers):
     CORRECCIONES = {
         'SPYL': 'SPLG', 'IVVPESO': 'IVVPESO.MX', 'NAFTRAC': 'NAFTRAC.MX', 'GLD': 'GLD.MX',
         'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD', 'XRP': 'XRP-USD',
-        'ASUR B': 'ASURB.MX', 'VOLAR A': 'VOLARA.MX', 'FIBRAPL 14': 'FIBRAPL14.MX' 
-        # (El resto de tu lista se maneja con la limpieza automática)
+        'ASUR B': 'ASURB.MX', 'VOLAR A': 'VOLARA.MX', 'FIBRAPL 14': 'FIBRAPL14.MX',
+        'FIBRAMQ 12': 'FIBRAMQ12.MX'
     }
     
     for t_original in tickers:
         info = {'precio': 0, 'div_rate': 0, 'div_yield': 0}
-        
         t_clean = str(t_original).strip()
         if t_clean in CORRECCIONES:
             t_busqueda = CORRECCIONES[t_clean]
         else:
             t_busqueda = t_clean.replace('*', '').replace(' N', '').strip()
 
-        # Búsqueda
         candidatos = [t_busqueda]
-        if ".MX" not in t_busqueda and "-USD" not in t_busqueda: # No agregamos .MX si es Cripto
+        if ".MX" not in t_busqueda and "-USD" not in t_busqueda: 
             candidatos.append(t_busqueda + ".MX")
+        
+        # Limpieza agresiva de espacios para FIBRAS
         sin_espacios = t_busqueda.replace(" ", "") + ".MX"
         if sin_espacios not in candidatos and "-USD" not in t_busqueda:
             candidatos.append(sin_espacios)
@@ -118,12 +115,8 @@ def obtener_datos_mercado(tickers):
                 if not hist.empty:
                     encontrado = True
                     precio = hist['Close'].iloc[-1]
-                    
-                    # Convertir a MXN si viene en USD (Acciones USA o Cripto)
-                    if ".MX" in ticker_test: 
-                        info['precio'] = precio
-                    else: 
-                        info['precio'] = precio * usd_now # Conversión automática
+                    if ".MX" in ticker_test: info['precio'] = precio
+                    else: info['precio'] = precio * usd_now
                     
                     try:
                         r = stock.info.get('dividendRate', 0) or 0
@@ -160,7 +153,6 @@ if df_raw is not None and not df_raw.empty:
     
     # 2. LIMPIEZA
     df_raw['Ticker'] = df_raw['Ticker'].astype(str).str.strip()
-    
     def clean_money(x): 
         try: return float(str(x).replace('$','').replace(',','').strip())
         except: return 0.0
@@ -171,10 +163,12 @@ if df_raw is not None and not df_raw.empty:
     for c in ['Tipo','Sector','Notas']: 
         if c not in df_raw.columns: df_raw[c] = ""
     
+    # 🚨 RELLENO DE SECTORES VACÍOS 🚨
+    # Si dejas la celda vacía en Excel, aquí le ponemos "General" para que el gráfico no falle
     df_raw['Sector'] = df_raw['Sector'].replace('', 'General')
     df_raw['Tipo'] = df_raw['Tipo'].replace('', 'General')
 
-    # 3. AGRUPACIÓN CONTABLE
+    # 3. AGRUPACIÓN
     df_raw['Inversion_Fila'] = df_raw['Cantidad'] * df_raw['Costo_Unitario']
     
     df = df_raw.groupby('Ticker', as_index=False).agg({
@@ -187,7 +181,6 @@ if df_raw is not None and not df_raw.empty:
 
     # 4. MERCADO
     mercado = obtener_datos_mercado(df['Ticker'].unique())
-    
     df['Precio_Actual'] = df['Ticker'].map(lambda x: mercado[x]['precio'])
     df['Div_Rate'] = df['Ticker'].map(lambda x: mercado[x]['div_rate'])
     df['Div_Yield'] = df['Ticker'].map(lambda x: mercado[x]['div_yield']*100)
@@ -212,15 +205,15 @@ if df_raw is not None and not df_raw.empty:
         }).applymap(lambda x: f'background-color: {"#113311" if x>=0 else "#331111"}', subset=['Ganancia', 'Rend_%'])
 
     def bloque_activo(df_fuente, titulo, tipo_filtro):
-        # Filtra por texto (SIC, BMV, ETF, CRYPTO, USA)
         d = df_fuente[df_fuente['Tipo'].str.upper().str.contains(tipo_filtro)]
         if not d.empty:
             st.markdown(f"### {titulo}")
             st.metric(f"Total {titulo}", f"${d['Valor_Mercado'].sum():,.2f}")
             
-            # Pastel
+            # 🚨 AQUÍ ESTÁ EL FIX DEL SECTOR 🚨
+            # Volvemos a incluir 'Sector' en el path del gráfico
             if d['Valor_Mercado'].sum() > 0:
-                fig = px.sunburst(d, path=['Ticker'], values='Valor_Mercado')
+                fig = px.sunburst(d, path=['Sector', 'Ticker'], values='Valor_Mercado')
                 fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=200)
                 st.plotly_chart(fig, use_container_width=True)
             
@@ -230,23 +223,19 @@ if df_raw is not None and not df_raw.empty:
         else:
             st.info(f"No hay activos tipo {titulo}")
 
-    # === TAB 1: PORTAFOLIO TRADICIONAL ===
     with tab1:
-        # Historia Global
         st.subheader("📈 Valor Total del Patrimonio")
         with st.spinner("Calculando historia..."):
             historia = generar_grafico_historico(df_real)
         if not historia.empty:
             fig_hist = px.area(historia, y='Valor_Total')
             fig_hist.update_layout(xaxis_title="", yaxis_title="MXN", height=250, showlegend=False, margin=dict(l=0, r=0, t=0, b=0))
-            fig_hist.update_xaxes(rangeslider_visible=False, rangeselector=dict(buttons=list([dict(count=1, label="1M", step="month", stepmode="backward"), dict(count=6, label="6M", step="month", stepmode="backward"), dict(step="all", label="Todo")])))
             st.plotly_chart(fig_hist, use_container_width=True)
 
         k1, k2, k3 = st.columns(3)
         t_val = df_real['Valor_Mercado'].sum()
         t_inv = df_real['Inversion_Total_Real'].sum()
         t_gan = df_real['Ganancia'].sum()
-        
         k1.metric("Patrimonio Total", f"${t_val:,.2f}")
         k2.metric("Costo Total", f"${t_inv:,.2f}")
         k3.metric("Plusvalía", f"${t_gan:,.2f}", delta=f"{(t_gan/t_inv*100):.2f}%" if t_inv>0 else "0%")
@@ -258,19 +247,12 @@ if df_raw is not None and not df_raw.empty:
         with c2: bloque_activo(df_real, "BMV", "BMV")
         with c3: bloque_activo(df_real, "ETFs", "ETF")
 
-    # === TAB 2: CRIPTO & USA (NUEVA PESTAÑA) ===
     with tab2:
         st.header("🌍 Mercado Internacional y Digital")
-        
         col_usa, col_crypto = st.columns(2)
-        
-        with col_usa:
-            bloque_activo(df_real, "🇺🇸 Acciones USA (Directo)", "USA")
-            
-        with col_crypto:
-            bloque_activo(df_real, "₿ Criptomonedas", "CRYPTO")
+        with col_usa: bloque_activo(df_real, "🇺🇸 Acciones USA", "USA")
+        with col_crypto: bloque_activo(df_real, "₿ Criptomonedas", "CRYPTO")
 
-    # === TAB 3: DIVIDENDOS ===
     with tab3:
         d = df_real[df_real['Pago_Anual'] > 0].copy()
         if not d.empty:
