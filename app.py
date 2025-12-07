@@ -7,7 +7,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Terminal Pro V22", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Pro V22", layout="wide", page_icon="🦁")
 st.markdown("""
     <style>
     .stMetric {background-color: #1E1E1E; border: 1px solid #333; padding: 10px; border-radius: 8px;}
@@ -15,7 +15,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Sectores Corregidos")
+st.title("🦁 DASHBOARD PRO")
 
 # --- CONEXIÓN ---
 # 👇👇👇 ¡TU LINK AQUÍ! 👇👇👇
@@ -266,3 +266,4 @@ if df_raw is not None and not df_raw.empty:
 
 else:
     st.info("Cargando...")
+
