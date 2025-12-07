@@ -17,7 +17,7 @@ def check_password():
     st.markdown("""<style>.stTextInput>div>div>input {text-align: center; font-size: 20px;}</style>""", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        st.write("### 🦁 Acceso Restringido")
+        st.write("### 🚀 Acceso Restringido")
         pwd = st.text_input("Contraseña:", type="password")
         if pwd == st.secrets["PASSWORD"]:
             st.session_state["password_correct"] = True
@@ -338,4 +338,5 @@ if df_raw is not None and not df_raw.empty:
 
 else:
     st.info("Cargando sistema...")
+
 
