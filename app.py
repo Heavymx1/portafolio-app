@@ -6,14 +6,14 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Terminal Pro V5", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Terminal Pro V6", layout="wide", page_icon="🦁")
 st.markdown("""
     <style>
     .stMetric {background-color: #1E1E1E; border: 1px solid #333; padding: 15px; border-radius: 10px;}
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Dividendos & Valor")
+st.title("🦁 DASHBOARD")
 
 # --- CONEXIÓN ---
 # 👇👇👇 ¡TU LINK AQUÍ! 👇👇👇
@@ -36,7 +36,7 @@ def cargar_datos():
         st.error(f"Error conexión: {e}")
         return None
 
-# --- MOTOR DE DATOS (Precios y Dividendos) ---
+# --- MOTOR DE DATOS ---
 def obtener_datos_mercado(tickers):
     data_dict = {}
     progreso = st.progress(0)
@@ -46,33 +46,23 @@ def obtener_datos_mercado(tickers):
         info = {'precio': 0, 'div_rate': 0, 'div_yield': 0}
         
         try:
-            # Lógica: Intentar MX primero, luego US
+            # Lógica Prioridad MX > US
             stock = yf.Ticker(t + ".MX")
             hist = stock.history(period="1d")
-            usado_mx = True
             
             if hist.empty:
                 stock = yf.Ticker(t)
                 hist = stock.history(period="1d")
-                usado_mx = False
             
             if not hist.empty:
                 info['precio'] = hist['Close'].iloc[-1]
-                
-                # Intentar obtener dividendos
-                # Yahoo a veces guarda esto en 'info'
                 try:
-                    info['div_rate'] = stock.info.get('dividendRate', 0) # Dinero anual por acción
-                    info['div_yield'] = stock.info.get('dividendYield', 0) # Porcentaje
-                    
-                    # Fix: A veces div_rate viene None
+                    info['div_rate'] = stock.info.get('dividendRate', 0)
+                    info['div_yield'] = stock.info.get('dividendYield', 0)
                     if info['div_rate'] is None: info['div_rate'] = 0
                     if info['div_yield'] is None: info['div_yield'] = 0
-                    
                 except: pass
-
-        except Exception as e:
-            print(f"Error {t}: {e}")
+        except: pass
             
         data_dict[t] = info
         progreso.progress((i + 1) / len(tickers))
@@ -85,138 +75,136 @@ if st.button('🔄 Recargar Mercado'):
     st.rerun()
 
 # --- PROCESAMIENTO ---
-df = cargar_datos()
+df_raw = cargar_datos()
 
-if df is not None and not df.empty:
-    # 1. Limpieza
-    df.columns = df.columns.str.lower().str.strip()
+if df_raw is not None and not df_raw.empty:
+    # 1. Limpieza inicial
+    df_raw.columns = df_raw.columns.str.lower().str.strip()
     mapa = {'emisora': 'ticker', 'titulos': 'cantidad', 'costo promedio': 'costo', 'sector': 'sector', 'tipo': 'tipo'}
-    df.rename(columns=mapa, inplace=True)
-    df.columns = df.columns.str.capitalize()
+    df_raw.rename(columns=mapa, inplace=True)
+    df_raw.columns = df_raw.columns.str.capitalize()
     
-    # 2. Sanitizar números (Quitar $ y ,)
+    # 2. Sanitizar números
     def limpiar_num(x):
         try: return float(str(x).replace('$','').replace(',','').strip())
         except: return 0.0
     
-    df['Cantidad'] = df['Cantidad'].apply(limpiar_num)
-    df['Costo'] = df['Costo'].apply(limpiar_num)
+    df_raw['Cantidad'] = df_raw['Cantidad'].apply(limpiar_num)
+    df_raw['Costo'] = df_raw['Costo'].apply(limpiar_num)
     
-    if 'Tipo' not in df.columns: df['Tipo'] = "General"
+    if 'Tipo' not in df_raw.columns: df_raw['Tipo'] = "General"
+    if 'Sector' not in df_raw.columns: df_raw['Sector'] = "Otros"
 
-    # 3. Descargar datos
-    with st.spinner('Analizando Dividendos y Precios...'):
+    # 3. AGRUPACIÓN Y FUSIÓN DE DUPLICADOS (NUEVO) 🚨
+    # Calculamos el dinero total invertido por fila antes de agrupar
+    df_raw['Inversion_Total'] = df_raw['Cantidad'] * df_raw['Costo']
+
+    # Agrupamos por Ticker (y conservamos Tipo/Sector)
+    df = df_raw.groupby('Ticker', as_index=False).agg({
+        'Tipo': 'first',      # Toma el primer valor que encuentre
+        'Sector': 'first',    # Toma el primer valor que encuentre
+        'Cantidad': 'sum',    # Suma las acciones (1000 + 10 = 1010)
+        'Inversion_Total': 'sum' # Suma el dinero invertido
+    })
+
+    # Recalculamos el Costo Promedio Ponderado
+    # Costo Promedio = Inversión Total / Cantidad Total
+    df['Costo'] = df['Inversion_Total'] / df['Cantidad']
+
+    # 4. Descargar Mercado
+    with st.spinner('Consolidando Portafolio...'):
         mercado = obtener_datos_mercado(df['Ticker'].unique())
 
-    # 4. Mapear resultados
+    # 5. Mapear y Calcular
     df['Precio_Actual'] = df['Ticker'].map(lambda x: mercado[x]['precio'])
     df['Div_Pago_Accion'] = df['Ticker'].map(lambda x: mercado[x]['div_rate'])
     df['Div_Yield_%'] = df['Ticker'].map(lambda x: mercado[x]['div_yield'] * 100 if mercado[x]['div_yield'] else 0)
 
-    # 5. Cálculos Financieros
     df['Valor_Mercado'] = df['Cantidad'] * df['Precio_Actual']
-    df['Costo_Total'] = df['Cantidad'] * df['Costo']
+    df['Costo_Total'] = df['Cantidad'] * df['Costo'] # Usamos el costo ya promediado
     df['Ganancia'] = df['Valor_Mercado'] - df['Costo_Total']
-    
-    # Cálculo seguro de Rendimiento %
     df['Rendimiento_%'] = df.apply(lambda x: (x['Ganancia']/x['Costo_Total']*100) if x['Costo_Total']>0 else 0, axis=1)
-    
-    # Cálculo de Ingreso Pasivo Anual (Estimado)
     df['Pago_Anual_Total'] = df['Cantidad'] * df['Div_Pago_Accion']
 
     # --- PESTAÑAS ---
-    tab_dash, tab_divs = st.tabs(["📊 Dashboard General", "💸 Dividendos"])
+    tab_dash, tab_divs = st.tabs(["📊 Dashboard Consolidado", "💸 Dividendos"])
 
-    # ==========================================
-    # PESTAÑA 1: DASHBOARD GENERAL (SIC vs BMV)
-    # ==========================================
+    # ESTILO DE COLORES ABSOLUTOS (CORRECCIÓN VISUAL)
+    def color_fondo(val):
+        # Verde oscuro para positivo, Rojo oscuro para negativo (Mejor contraste)
+        color = '#113311' if val >= 0 else '#331111' 
+        return f'background-color: {color}'
+
+    def color_texto(val):
+        # Verde neón para positivo, Rojo claro para negativo
+        color = '#45f542' if val >= 0 else '#ff4b4b'
+        return f'color: {color}'
+
+    # ==========================
+    # PESTAÑA 1: DASHBOARD
+    # ==========================
     with tab_dash:
-        # KPIs Globales
+        # KPIs
         k1, k2, k3 = st.columns(3)
         k1.metric("Patrimonio Total", f"${df['Valor_Mercado'].sum():,.2f}")
         k2.metric("Ganancia Total", f"${df['Ganancia'].sum():,.2f}", delta=f"{df['Ganancia'].sum():,.2f}")
-        k3.metric("Rendimiento Global", f"{(df['Ganancia'].sum()/df['Costo_Total'].sum()*100):.2f}%")
+        rend_global = (df['Ganancia'].sum()/df['Costo_Total'].sum()*100) if df['Costo_Total'].sum() > 0 else 0
+        k3.metric("Rendimiento Global", f"{rend_global:.2f}%")
         
         st.markdown("---")
         
-        # Separación visual SIC vs BMV
+        # SIC vs BMV
         col_sic, col_bmv = st.columns(2)
-        
-        # -- LADO SIC --
         with col_sic:
-            st.header("🌍 SIC (Internacional)")
+            st.header("🌍 SIC")
             df_sic = df[df['Tipo'].str.upper().str.contains('SIC')]
             if not df_sic.empty:
                 st.metric("Valor SIC", f"${df_sic['Valor_Mercado'].sum():,.2f}")
                 st.plotly_chart(px.sunburst(df_sic, path=['Sector', 'Ticker'], values='Valor_Mercado'), use_container_width=True)
-                st.plotly_chart(px.bar(df_sic, x='Ganancia', y='Ticker', orientation='h', color='Ganancia', color_continuous_scale='RdYlGn'), use_container_width=True)
-        
-        # -- LADO BMV --
+                
         with col_bmv:
-            st.header("🇲🇽 BMV (México)")
+            st.header("🇲🇽 BMV")
             df_bmv = df[df['Tipo'].str.upper().str.contains('BMV')]
             if not df_bmv.empty:
                 st.metric("Valor BMV", f"${df_bmv['Valor_Mercado'].sum():,.2f}")
                 st.plotly_chart(px.sunburst(df_bmv, path=['Sector', 'Ticker'], values='Valor_Mercado'), use_container_width=True)
-                st.plotly_chart(px.bar(df_bmv, x='Ganancia', y='Ticker', orientation='h', color='Ganancia', color_continuous_scale='RdYlGn'), use_container_width=True)
 
-        # -- TABLA GENERAL CON MAPA DE CALOR CORREGIDO --
-        st.subheader("📋 Resumen de Acciones")
+        # TABLA PRINCIPAL (CON COLORES CORREGIDOS)
+        st.subheader("📋 Resumen de Acciones (Consolidado)")
         
-        # Seleccionamos columnas
-        cols_dash = ['Ticker', 'Tipo', 'Cantidad', 'Costo', 'Precio_Actual', 'Ganancia', 'Rendimiento_%']
-        df_show = df[cols_dash].copy()
+        cols_show = ['Ticker', 'Tipo', 'Cantidad', 'Costo', 'Precio_Actual', 'Ganancia', 'Rendimiento_%']
         
-        # Aplicamos estilo (Aquí está el truco para que no falle el color)
+        # Aplicamos estilo MANUALMENTE en lugar de usar gradient
         st.dataframe(
-            df_show.style
+            df[cols_show].style
             .format({
                 'Costo': "${:,.2f}",
                 'Precio_Actual': "${:,.2f}",
                 'Ganancia': "${:,.2f}",
                 'Rendimiento_%': "{:,.2f}%"
             })
-            # El gradiente se aplica sobre los NÚMEROS, no sobre el texto formateado
-            .background_gradient(subset=['Ganancia', 'Rendimiento_%'], cmap='RdYlGn'),
+            # Aplicamos la función de color "Si es > 0 Verde, Si es < 0 Rojo"
+            .applymap(color_fondo, subset=['Ganancia', 'Rendimiento_%']),
             use_container_width=True
         )
 
-    # ==========================================
+    # ==========================
     # PESTAÑA 2: DIVIDENDOS
-    # ==========================================
+    # ==========================
     with tab_divs:
-        st.subheader("💰 Calendario de Pagos & Proyección")
-        
+        st.subheader("💰 Proyección de Dividendos")
         total_income = df['Pago_Anual_Total'].sum()
-        yield_avg = df[df['Pago_Anual_Total']>0]['Div_Yield_%'].mean()
-        
         d1, d2 = st.columns(2)
-        d1.metric("Ingreso Pasivo Anual (Estimado)", f"${total_income:,.2f}", help="Suma de (Tus Acciones * Dividendo Anual)")
-        d2.metric("Yield Promedio", f"{yield_avg:.2f}%")
+        d1.metric("Ingreso Anual Estimado", f"${total_income:,.2f}")
         
-        st.markdown("#### 💎 Acciones que pagan dividendos")
+        df_divs = df[df['Pago_Anual_Total'] > 0][['Ticker', 'Cantidad', 'Div_Yield_%', 'Pago_Anual_Total']]
         
-        # Filtramos solo las que pagan > 0
-        df_divs = df[df['Pago_Anual_Total'] > 0].copy()
-        
-        # Seleccionamos columnas relevantes para dividendos
-        cols_divs = ['Ticker', 'Cantidad', 'Div_Yield_%', 'Div_Pago_Accion', 'Pago_Anual_Total']
-        df_divs_show = df_divs[cols_divs].sort_values('Pago_Anual_Total', ascending=False)
-        
-        # Tabla específica de dividendos
         st.dataframe(
-            df_divs_show.style
-            .format({
-                'Div_Yield_%': "{:.2f}%",
-                'Div_Pago_Accion': "${:.2f}",
-                'Pago_Anual_Total': "${:,.2f}"
-            })
-            .bar(subset=['Pago_Anual_Total'], color='#00CC96'), # Barra de progreso verde
+            df_divs.sort_values('Pago_Anual_Total', ascending=False).style
+            .format({'Div_Yield_%': "{:.2f}%", 'Pago_Anual_Total': "${:,.2f}"})
+            .bar(subset=['Pago_Anual_Total'], color='#00CC96'),
             use_container_width=True
         )
-        
-        if df_divs.empty:
-            st.warning("Yahoo Finance no reporta dividendos para tus acciones actuales o no pagan dividendos.")
 
 else:
     st.info("Cargando portafolio...")
