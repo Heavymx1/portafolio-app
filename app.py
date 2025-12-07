@@ -5,9 +5,50 @@ import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+import time
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Pro V22", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Terminal Pro V23 (Privada)", layout="wide", page_icon="🦁")
+
+# --- 🔐 SISTEMA DE LOGIN (CANDADO DE SEGURIDAD) 🔐 ---
+def check_password():
+    """Retorna True si el usuario ingresó la contraseña correcta."""
+    
+    # 1. Si la contraseña ya está en memoria (ya se logueó), pasar directo
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # 2. Interfaz de Login
+    st.markdown("""
+        <style>
+        .stTextInput > div > div > input {text-align: center; font-size: 20px;}
+        </style>
+        """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.write("### 🦁 Acceso Restringido")
+        st.write("Esta terminal financiera es privada.")
+        pwd_input = st.text_input("Ingresa la contraseña:", type="password")
+        
+        if pwd_input:
+            # Comparamos con la contraseña guardada en Secrets
+            if pwd_input == st.secrets["PASSWORD"]:
+                st.session_state["password_correct"] = True
+                st.rerun() # Recargamos la página para mostrar el contenido
+            else:
+                st.error("❌ Contraseña incorrecta")
+
+    return False
+
+# SI NO PASA EL LOGIN, DETENEMOS TODO EL CÓDIGO AQUÍ
+if not check_password():
+    st.stop()
+
+# =========================================================
+# 🚀 SI LLEGASTE AQUÍ, ES QUE PUSISTE LA CONTRASEÑA BIEN
+# =========================================================
+
 st.markdown("""
     <style>
     .stMetric {background-color: #1E1E1E; border: 1px solid #333; padding: 10px; border-radius: 8px;}
@@ -15,12 +56,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 DASHBOARD PRO")
+st.title("🦁 Terminal Patrimonial: Segura")
 
 # --- CONEXIÓN ---
-# 👇👇👇 ¡TU LINK AQUÍ! 👇👇👇
-URL_HOJA = "https://docs.google.com/spreadsheets/d/1UpgDIh3nuhxz83NQg7KYPu_Boj4C-nP0rrw9YgTjWEo/edit?gid=1838439399#gid=1838439399" 
-# 👆👆👆👆👆👆👆👆👆👆👆👆👆👆👆👆
+# Ahora leemos el link desde los SECRETOS (Más seguro)
+URL_HOJA = st.secrets["SHEET_URL"]
 
 @st.cache_data(ttl=0) 
 def cargar_datos_google():
@@ -86,7 +126,7 @@ def obtener_datos_mercado(tickers):
         'SPYL': 'SPLG', 'IVVPESO': 'IVVPESO.MX', 'NAFTRAC': 'NAFTRAC.MX', 'GLD': 'GLD.MX',
         'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD', 'XRP': 'XRP-USD',
         'ASUR B': 'ASURB.MX', 'VOLAR A': 'VOLARA.MX', 'FIBRAPL 14': 'FIBRAPL14.MX',
-        'FIBRAMQ 12': 'FIBRAMQ12.MX'
+        'FIBRAMQ 12': 'FIBRAMQ12.MX', 'GAP B': 'GAPB.MX', 'OMA B': 'OMAB.MX'
     }
     
     for t_original in tickers:
@@ -100,8 +140,6 @@ def obtener_datos_mercado(tickers):
         candidatos = [t_busqueda]
         if ".MX" not in t_busqueda and "-USD" not in t_busqueda: 
             candidatos.append(t_busqueda + ".MX")
-        
-        # Limpieza agresiva de espacios para FIBRAS
         sin_espacios = t_busqueda.replace(" ", "") + ".MX"
         if sin_espacios not in candidatos and "-USD" not in t_busqueda:
             candidatos.append(sin_espacios)
@@ -135,6 +173,9 @@ with st.sidebar:
     if st.button('🔄 ACTUALIZAR'):
         st.cache_data.clear()
         st.rerun()
+    if st.button("🔒 Cerrar Sesión"):
+        st.session_state["password_correct"] = False
+        st.rerun()
     st.caption(f"Actualizado: {datetime.now().strftime('%H:%M:%S')}")
 
 # --- LÓGICA PRINCIPAL ---
@@ -163,8 +204,6 @@ if df_raw is not None and not df_raw.empty:
     for c in ['Tipo','Sector','Notas']: 
         if c not in df_raw.columns: df_raw[c] = ""
     
-    # 🚨 RELLENO DE SECTORES VACÍOS 🚨
-    # Si dejas la celda vacía en Excel, aquí le ponemos "General" para que el gráfico no falle
     df_raw['Sector'] = df_raw['Sector'].replace('', 'General')
     df_raw['Tipo'] = df_raw['Tipo'].replace('', 'General')
 
@@ -209,15 +248,10 @@ if df_raw is not None and not df_raw.empty:
         if not d.empty:
             st.markdown(f"### {titulo}")
             st.metric(f"Total {titulo}", f"${d['Valor_Mercado'].sum():,.2f}")
-            
-            # 🚨 AQUÍ ESTÁ EL FIX DEL SECTOR 🚨
-            # Volvemos a incluir 'Sector' en el path del gráfico
             if d['Valor_Mercado'].sum() > 0:
                 fig = px.sunburst(d, path=['Sector', 'Ticker'], values='Valor_Mercado')
                 fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=200)
                 st.plotly_chart(fig, use_container_width=True)
-            
-            # Tabla
             cols = ['Ticker','Cantidad','Costo_Promedio_Real','Precio_Actual','Inversion_Total_Real','Ganancia','Rend_%']
             st.dataframe(estilo(d[cols]), use_container_width=True)
         else:
@@ -225,7 +259,7 @@ if df_raw is not None and not df_raw.empty:
 
     with tab1:
         st.subheader("📈 Valor Total del Patrimonio")
-        with st.spinner("Calculando historia..."):
+        with st.spinner("Conectando de forma segura..."):
             historia = generar_grafico_historico(df_real)
         if not historia.empty:
             fig_hist = px.area(historia, y='Valor_Total')
@@ -236,12 +270,11 @@ if df_raw is not None and not df_raw.empty:
         t_val = df_real['Valor_Mercado'].sum()
         t_inv = df_real['Inversion_Total_Real'].sum()
         t_gan = df_real['Ganancia'].sum()
+        
         k1.metric("Patrimonio Total", f"${t_val:,.2f}")
         k2.metric("Costo Total", f"${t_inv:,.2f}")
         k3.metric("Plusvalía", f"${t_gan:,.2f}", delta=f"{(t_gan/t_inv*100):.2f}%" if t_inv>0 else "0%")
-        
         st.markdown("---")
-        
         c1, c2, c3 = st.columns(3)
         with c1: bloque_activo(df_real, "SIC", "SIC")
         with c2: bloque_activo(df_real, "BMV", "BMV")
@@ -265,5 +298,4 @@ if df_raw is not None and not df_raw.empty:
         else: st.info("Sin dividendos.")
 
 else:
-    st.info("Cargando...")
-
+    st.info("Cargando sistema seguro...")
