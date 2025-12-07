@@ -7,7 +7,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Terminal Pro V16", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Terminal Pro V17 (GBM)", layout="wide", page_icon="🦁")
 st.markdown("""
     <style>
     .stMetric {background-color: #1E1E1E; border: 1px solid #333; padding: 10px; border-radius: 8px;}
@@ -15,7 +15,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Precisión Total")
+st.title("🦁 Terminal Patrimonial: Modo GBM")
 
 # --- CONEXIÓN ---
 # 👇👇👇 ¡TU LINK AQUÍ! 👇👇👇
@@ -33,12 +33,13 @@ def cargar_datos_google():
         
         client = gspread.authorize(creds)
         sh = client.open_by_url(URL_HOJA)
+        # Traemos todo como texto para limpiarlo con Python
         return pd.DataFrame(sh.sheet1.get_all_records()).astype(str)
     except Exception as e:
         st.error(f"Error Google Sheets: {e}")
         return None
 
-# --- MOTOR DE HISTORIA (GRÁFICO AJUSTABLE) ---
+# --- MOTOR DE HISTORIA ---
 @st.cache_data(ttl=300)
 def generar_grafico_historico(df_real):
     hist_usd = yf.Ticker("USDMXN=X").history(period="6mo")['Close']
@@ -47,8 +48,6 @@ def generar_grafico_historico(df_real):
     
     CORRECCIONES = {'SPYL': 'SPLG', 'IVVPESO': 'IVVPESO.MX', 'NAFTRAC': 'NAFTRAC.MX'}
     
-    # Barra de carga invisible para no molestar
-    total = len(df_real)
     for i, row in df_real.iterrows():
         t = row['Ticker']
         qty = row['Cantidad']
@@ -56,7 +55,6 @@ def generar_grafico_historico(df_real):
         t_busqueda = CORRECCIONES.get(t_clean, t_clean)
         
         try:
-            # Prioridad MX
             hist = yf.Ticker(t_busqueda + ".MX").history(period="6mo")['Close']
             es_mxn = True
             if hist.empty:
@@ -67,14 +65,11 @@ def generar_grafico_historico(df_real):
                 hist.index = hist.index.tz_localize(None) 
                 hist = hist.reindex(df_historia.index, method='ffill').fillna(0)
                 if not es_mxn: hist = hist * hist_usd.values
-                
-                # Sumamos al valor total histórico
                 df_historia['Valor_Total'] += (hist * qty)
         except: pass
-        
     return df_historia
 
-# --- MOTOR DE PRECIOS ACTUALES ---
+# --- MOTOR DE PRECIOS ---
 def obtener_datos_mercado(tickers):
     data_dict = {}
     try: usd_now = yf.Ticker("USDMXN=X").history(period="1d")['Close'].iloc[-1]
@@ -122,34 +117,51 @@ with st.sidebar:
 df_raw = cargar_datos_google()
 
 if df_raw is not None and not df_raw.empty:
-    # 1. Normalización
+    # 🚨 PASO 1: TRADUCCIÓN DE COLUMNAS GBM -> SISTEMA 🚨
+    # Convertimos todo a minúsculas
     df_raw.columns = df_raw.columns.str.lower().str.strip()
-    mapa = {
-        'emisora': 'ticker', 'simbolo': 'ticker', 'ticker': 'ticker',
-        'titulos': 'cantidad', 'títulos': 'cantidad', 'cantidad': 'cantidad',
-        'costo promedio': 'costo', 'costo': 'costo', 'precio compra': 'costo',
-        'sector': 'sector', 'tipo': 'tipo', 'notas': 'notas'
+    
+    # Mapa Específico para GBM
+    mapa_gbm = {
+        'emisora': 'ticker',        # GBM usa "Emisora"
+        'emisora/serie': 'ticker',  # A veces viene junto
+        'titulos': 'cantidad',      # GBM usa "Títulos"
+        'títulos': 'cantidad',
+        'costo promedio': 'costo',  # GBM usa "Costo promedio"
+        'costo prom.': 'costo',
+        'tipo': 'tipo',             # Columna manual tuya
+        'sector': 'sector',         # Columna manual tuya (opcional)
+        'notas': 'notas'            # Columna manual tuya
     }
-    df_raw.rename(columns=mapa, inplace=True)
+    df_raw.rename(columns=mapa_gbm, inplace=True)
     df_raw.columns = df_raw.columns.str.capitalize()
     
-    # 2. Limpieza Numérica
-    def clean(x): 
-        try: return float(str(x).replace('$','').replace(',','').strip())
+    # Validación: Si no encuentra las columnas clave, avisa pero no explota
+    if 'Ticker' not in df_raw.columns or 'Cantidad' not in df_raw.columns:
+        st.error("⚠️ No detecto las columnas de GBM ('Emisora', 'Títulos'). Revisa tu Excel.")
+        st.stop()
+
+    # 🚨 PASO 2: LIMPIEZA PROFUNDA DE NÚMEROS (FORMATO MONEDA GBM) 🚨
+    def clean_gbm_money(x): 
+        try:
+            # Quitamos el signo $, las comas, y espacios
+            clean_str = str(x).replace('$', '').replace(',', '').strip()
+            return float(clean_str)
         except: return 0.0
     
-    df_raw['Cantidad'] = df_raw['Cantidad'].apply(clean)
-    df_raw['Costo'] = df_raw['Costo'].apply(clean) # Este es tu Costo Unitario Promedio
+    df_raw['Cantidad'] = df_raw['Cantidad'].apply(clean_gbm_money)
+    df_raw['Costo'] = df_raw['Costo'].apply(clean_gbm_money)
     
+    # Rellenar columnas manuales si no existen
     for c in ['Tipo','Sector','Notas']: 
         if c not in df_raw.columns: df_raw[c] = ""
     
-    # FIX IMPORTANTE PARA GRÁFICOS DE PASTEL: Si no tiene sector, ponemos "General"
+    # Autoclasificación por defecto
     df_raw['Sector'] = df_raw['Sector'].replace('', 'General')
     df_raw['Tipo'] = df_raw['Tipo'].replace('', 'General')
 
-    # 3. Agrupación y Cálculo de Inversión
-    # Primero calculamos el total invertido por fila
+    # 3. Agrupación (Consolidar filas de GBM)
+    # Calculamos Inversión Total basada en el Costo Promedio que reporta GBM
     df_raw['Inversion_Total'] = df_raw['Cantidad'] * df_raw['Costo']
     
     df = df_raw.groupby('Ticker', as_index=False).agg({
@@ -157,87 +169,59 @@ if df_raw is not None and not df_raw.empty:
         'Inversion_Total': 'sum', 'Notas': 'first'
     })
     
-    # Recalculamos el costo unitario ponderado (solo para referencia visual)
-    df['Costo_Unitario'] = df.apply(lambda x: x['Inversion_Total'] / x['Cantidad'] if x['Cantidad'] > 0 else 0, axis=1)
+    # Costo Promedio Ponderado
+    df['Costo'] = df.apply(lambda x: x['Inversion_Total'] / x['Cantidad'] if x['Cantidad'] > 0 else 0, axis=1)
 
-    # 4. Obtener Precios Actuales
+    # 4. Mercado
     mercado = obtener_datos_mercado(df['Ticker'].unique())
     
     df['Precio_Actual'] = df['Ticker'].map(lambda x: mercado[x]['precio'])
     df['Div_Rate'] = df['Ticker'].map(lambda x: mercado[x]['div_rate'])
     df['Div_Yield'] = df['Ticker'].map(lambda x: mercado[x]['div_yield']*100)
 
-    # 5. CÁLCULOS MATEMÁTICOS CORREGIDOS 🧮
-    # Valor de Mercado = Lo que valen hoy tus acciones
+    # 5. Cálculos Finales
     df['Valor_Mercado'] = df['Cantidad'] * df['Precio_Actual']
     
-    # Ganancia Real = Valor Hoy - Inversión Total (La que salió de tu Excel)
+    # Ganancia Real = Valor Mercado - Inversión (Calculada con datos de GBM)
     df['Ganancia'] = df['Valor_Mercado'] - df['Inversion_Total']
     
-    # Rendimiento %
     df['Rend_%'] = df.apply(lambda x: (x['Ganancia']/x['Inversion_Total']*100) if x['Inversion_Total']>0 else 0, axis=1)
-    
-    # Dividendos
     df['Pago_Anual'] = df['Cantidad'] * df['Div_Rate']
     df['Pago_Mensual'] = df['Pago_Anual'] / 12
 
-    # Separar
+    # Separación
     df_real = df[df['Cantidad'] > 0].copy()
     df_watch = df[df['Cantidad'] == 0].copy()
 
     # --- PESTAÑAS ---
-    tab1, tab2, tab3 = st.tabs(["📊 Histórico & Balance", "💸 Dividendos", "🎯 Watchlist"])
+    tab1, tab2, tab3 = st.tabs(["📊 Dashboard GBM", "💸 Dividendos", "🎯 Watchlist"])
 
-    # Función de estilo
     def estilo(df_in):
         return df_in.style.format({
-            'Costo_Unitario': "${:,.2f}", 'Precio_Actual': "${:,.2f}", 'Inversion_Total': "${:,.2f}", 
+            'Costo': "${:,.2f}", 'Precio_Actual': "${:,.2f}", 'Inversion_Total': "${:,.2f}",
             'Valor_Mercado': "${:,.2f}", 'Ganancia': "${:,.2f}", 'Rend_%': "{:,.2f}%"
         }).applymap(lambda x: f'background-color: {"#113311" if x>=0 else "#331111"}', subset=['Ganancia', 'Rend_%'])
 
     with tab1:
-        # 1. GRÁFICA DE HISTORIA (PEQUEÑA Y CON BOTONES)
-        st.subheader("📈 Evolución de Valor")
-        with st.spinner("Generando gráfico..."):
+        # Historia
+        with st.spinner("Procesando datos de GBM..."):
             historia = generar_grafico_historico(df_real)
-        
         if not historia.empty:
             fig_hist = px.area(historia, y='Valor_Total')
-            fig_hist.update_layout(
-                xaxis_title="", 
-                yaxis_title="MXN", 
-                height=250, # Altura reducida (cuadro pequeño)
-                showlegend=False,
-                margin=dict(l=0, r=0, t=0, b=0)
-            )
-            # Botones para cambiar temporalidad (Días, Semanas, Meses)
-            fig_hist.update_xaxes(
-                rangeslider_visible=False,
-                rangeselector=dict(
-                    buttons=list([
-                        dict(count=7, label="1S", step="day", stepmode="backward"),
-                        dict(count=1, label="1M", step="month", stepmode="backward"),
-                        dict(count=3, label="3M", step="month", stepmode="backward"),
-                        dict(count=6, label="6M", step="month", stepmode="backward"),
-                        dict(step="all", label="Todo")
-                    ])
-                )
-            )
+            fig_hist.update_layout(xaxis_title="", yaxis_title="MXN", height=250, showlegend=False, margin=dict(l=0, r=0, t=0, b=0))
+            fig_hist.update_xaxes(rangeslider_visible=False, rangeselector=dict(buttons=list([dict(count=1, label="1M", step="month", stepmode="backward"), dict(count=6, label="6M", step="month", stepmode="backward"), dict(step="all", label="Todo")])))
             st.plotly_chart(fig_hist, use_container_width=True)
 
-        st.markdown("---")
-        
-        # 2. KPIs
+        # KPIs
         k1, k2, k3 = st.columns(3)
         t_val = df_real['Valor_Mercado'].sum()
         t_inv = df_real['Inversion_Total'].sum()
         t_gan = df_real['Ganancia'].sum()
         
         k1.metric("Valor Actual", f"${t_val:,.2f}")
-        k2.metric("Inversión Total", f"${t_inv:,.2f}", help="Suma de (Cantidad * Costo Promedio)")
-        k3.metric("Ganancia Neta", f"${t_gan:,.2f}", delta=f"{(t_gan/t_inv*100):.2f}%" if t_inv > 0 else "0%")
+        k2.metric("Inversión (Costo GBM)", f"${t_inv:,.2f}")
+        k3.metric("Ganancia Real", f"${t_gan:,.2f}", delta=f"{(t_gan/t_inv*100):.2f}%" if t_inv>0 else "0%")
         
-        # 3. COLUMNAS DINÁMICAS
         c1, c2, c3 = st.columns(3)
         
         def bloque(titulo, tipo):
@@ -245,17 +229,12 @@ if df_raw is not None and not df_raw.empty:
             d = df_real[df_real['Tipo'].str.upper().str.contains(tipo)]
             if not d.empty:
                 st.metric(f"Total {tipo}", f"${d['Valor_Mercado'].sum():,.2f}")
-                
-                # GRÁFICO DE PASTEL (Obligado a aparecer)
                 if d['Valor_Mercado'].sum() > 0:
-                    fig_sun = px.sunburst(d, path=['Sector', 'Ticker'], values='Valor_Mercado')
-                    fig_sun.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=200)
-                    st.plotly_chart(fig_sun, use_container_width=True)
-                
-                # TABLA DETALLADA
-                # Mostramos: Ticker, Cantidad, Inversión (Total pagado), Valor Actual, Ganancia
-                cols_ver = ['Ticker','Cantidad','Inversion_Total','Valor_Mercado','Ganancia','Rend_%']
-                st.dataframe(estilo(d[cols_ver]), use_container_width=True)
+                    fig = px.sunburst(d, path=['Sector', 'Ticker'], values='Valor_Mercado')
+                    fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=200)
+                    st.plotly_chart(fig, use_container_width=True)
+                # Tabla GBM limpia
+                st.dataframe(estilo(d[['Ticker','Cantidad','Costo','Precio_Actual','Ganancia','Rend_%']]), use_container_width=True)
         
         with c1: bloque("🌍 SIC", "SIC")
         with c2: bloque("🇲🇽 BMV", "BMV")
