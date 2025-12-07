@@ -7,7 +7,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Terminal Pro V27", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Terminal Pro V28", layout="wide", page_icon="🦁")
 
 # --- 🔐 LOGIN ---
 def check_password():
@@ -36,7 +36,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Multidivisa")
+st.title("🦁 Terminal Patrimonial: Live Market")
 
 URL_HOJA = st.secrets["SHEET_URL"]
 
@@ -55,7 +55,7 @@ def cargar_datos_google():
         st.error(f"Error Google Sheets: {e}")
         return None
 
-# --- HISTORIA ---
+# --- MOTOR DE HISTORIA ---
 @st.cache_data(ttl=300)
 def generar_grafico_historico(df_real):
     try: hist_usd = yf.Ticker("USDMXN=X").history(period="6mo")['Close']
@@ -88,8 +88,8 @@ def generar_grafico_historico(df_real):
         except: pass
     return df_historia
 
-# --- MERCADO ---
-def obtener_datos_mercado(tickers, usd_rate):
+# --- MOTOR DE PRECIOS ---
+def obtener_datos_mercado(tickers, usd_now):
     data_dict = {}
     
     CORRECCIONES = {
@@ -125,21 +125,14 @@ def obtener_datos_mercado(tickers, usd_rate):
                     precio_nativo = hist['Close'].iloc[-1]
                     
                     if ".MX" in ticker_test: info['precio'] = precio_nativo
-                    else: info['precio'] = precio_nativo * usd_rate
+                    else: info['precio'] = precio_nativo * usd_now
                     
                     try:
                         rate = stock.info.get('dividendRate', 0)
                         yield_pct = stock.info.get('dividendYield', 0)
-                        
-                        # Rescate de dividendos híbrido
-                        if (rate is None or rate == 0) and (yield_pct and yield_pct > 0):
-                            rate = precio_nativo * yield_pct
-                        if (rate is None or rate == 0):
-                             rate = stock.info.get('trailingAnnualDividendRate', 0)
-                        
-                        # Conversión si el dividendo viene en USD
-                        if ".MX" not in ticker_test and rate: rate = rate * usd_rate
-                        
+                        if (rate is None or rate == 0) and (yield_pct and yield_pct > 0): rate = precio_nativo * yield_pct
+                        if (rate is None or rate == 0): rate = stock.info.get('trailingAnnualDividendRate', 0)
+                        if ".MX" not in ticker_test and rate: rate = rate * usd_now
                         if rate: info['div_rate'] = rate
                         if yield_pct: info['div_yield'] = yield_pct
                     except: pass
@@ -147,7 +140,7 @@ def obtener_datos_mercado(tickers, usd_rate):
         data_dict[t_original] = info
     return data_dict
 
-# --- SIDEBAR ---
+# --- SIDEBAR MEJORADO (INFO MERCADO) ---
 with st.sidebar:
     st.header("⚙️ Control")
     if st.button('🔄 ACTUALIZAR'):
@@ -156,29 +149,69 @@ with st.sidebar:
     if st.button("🔒 Salir"):
         st.session_state["password_correct"] = False
         st.rerun()
+    
+    st.markdown("---")
+    st.subheader("🌎 Mercado Hoy")
+    
+    # 1. Monedas en Tiempo Real
+    try:
+        # USD
+        usd_tk = yf.Ticker("USDMXN=X")
+        usd_h = usd_tk.history(period="2d")
+        usd_now = usd_h['Close'].iloc[-1]
+        usd_prev = usd_h['Close'].iloc[-2]
+        usd_delta = usd_now - usd_prev
+        
+        st.metric("🇺🇸 Dólar (USD)", f"${usd_now:.2f}", f"{usd_delta:.2f}")
+        
+        # EUR
+        eur_now = yf.Ticker("EURMXN=X").history(period="1d")['Close'].iloc[-1]
+        st.metric("🇪🇺 Euro (EUR)", f"${eur_now:.2f}")
+        
+        # BTC & ETH
+        btc_now = yf.Ticker("BTC-USD").history(period="1d")['Close'].iloc[-1]
+        eth_now = yf.Ticker("ETH-USD").history(period="1d")['Close'].iloc[-1]
+        
+        c1, c2 = st.columns(2)
+        c1.metric("₿ BTC", f"${btc_now:,.0f}")
+        c2.metric("Ξ ETH", f"${eth_now:,.0f}")
+        
+    except:
+        usd_now = 20.00
+        st.error("Error conectando forex")
+
+    st.markdown("---")
+    st.subheader("🔥 Top Movers (Big Tech)")
+    
+    # 2. Top 3 del Mercado (Escaneo Rápido de Gigantes)
+    lista_top = ['NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'AMD', 'NFLX', 'INTC']
+    movers = []
+    
+    # Usamos un spinner silencioso para no molestar
+    with st.empty():
+        try:
+            # Descarga masiva para ser rápido
+            data_top = yf.download(lista_top, period="2d", progress=False)['Close']
+            if not data_top.empty:
+                # Calcular cambio %
+                cambios = ((data_top.iloc[-1] - data_top.iloc[-2]) / data_top.iloc[-2]) * 100
+                # Ordenar y tomar top 3
+                top_3 = cambios.sort_values(ascending=False).head(3)
+                
+                for t, chg in top_3.items():
+                    st.metric(t, f"{chg:.2f}%", f"{chg:.2f}%")
+        except:
+            st.caption("Cargando mercado...")
+
+    st.markdown("---")
     st.caption(f"Actualizado: {datetime.now().strftime('%H:%M:%S')}")
 
-# --- PROCESO ---
+# --- PROCESO PRINCIPAL ---
 df_raw = cargar_datos_google()
 
 if df_raw is not None and not df_raw.empty:
-    # 1. Obtener Dólar en Tiempo Real (Para conversiones)
-    try: 
-        usd_now = yf.Ticker("USDMXN=X").history(period="1d")['Close'].iloc[-1]
-    except: 
-        usd_now = 20.00
-    
-    st.sidebar.metric("Dólar Hoy", f"${usd_now:.2f} MXN")
-
-    # 2. Normalización de columnas
     df_raw.columns = df_raw.columns.str.lower().str.strip()
-    mapa_gbm = {
-        'emisora': 'Ticker', 'emisora/serie': 'Ticker', 'ticker': 'Ticker',
-        'titulos': 'Cantidad', 'títulos': 'Cantidad', 'cantidad': 'Cantidad',
-        'costo promedio': 'Costo_Unitario', 'costo': 'Costo_Unitario',
-        'tipo': 'Tipo', 'sector': 'Sector', 'notas': 'Notas', 
-        'moneda': 'Moneda' # <--- Nueva Columna
-    }
+    mapa_gbm = {'emisora': 'Ticker', 'emisora/serie': 'Ticker', 'ticker': 'Ticker', 'titulos': 'Cantidad', 'títulos': 'Cantidad', 'cantidad': 'Cantidad', 'costo promedio': 'Costo_Unitario', 'costo': 'Costo_Unitario', 'tipo': 'Tipo', 'sector': 'Sector', 'notas': 'Notas', 'moneda': 'Moneda'}
     df_raw.rename(columns=mapa_gbm, inplace=True)
     df_raw['Ticker'] = df_raw['Ticker'].astype(str).str.strip()
     
@@ -189,42 +222,25 @@ if df_raw is not None and not df_raw.empty:
     df_raw['Cantidad'] = df_raw['Cantidad'].apply(clean_money)
     df_raw['Costo_Unitario'] = df_raw['Costo_Unitario'].apply(clean_money)
 
-    # Rellenar vacíos
     for c in ['Tipo','Sector','Notas','Moneda']: 
         if c not in df_raw.columns: df_raw[c] = ""
     df_raw['Sector'] = df_raw['Sector'].replace('', 'General')
     df_raw['Tipo'] = df_raw['Tipo'].replace('', 'General')
     
-    # 🚨 LÓGICA DE CONVERSIÓN DE COSTO (USD -> MXN) 🚨
-    # Si la columna Moneda dice "USD", multiplicamos el costo por el dólar actual
-    def convertir_a_mxn(row):
-        moneda = str(row['Moneda']).upper().strip()
-        costo = row['Costo_Unitario']
-        if 'USD' in moneda:
-            return costo * usd_now
-        return costo # Si es MXN o vacío, se queda igual
+    def convert_mxn(row):
+        return row['Costo_Unitario'] * usd_now if 'USD' in str(row['Moneda']).upper() else row['Costo_Unitario']
+    df_raw['Costo_Unitario_MXN'] = df_raw.apply(convert_mxn, axis=1)
 
-    df_raw['Costo_Unitario_MXN'] = df_raw.apply(convertir_a_mxn, axis=1)
-
-    # 3. Agrupación usando el Costo ya convertido a Pesos
     df_raw['Inversion_Fila'] = df_raw['Cantidad'] * df_raw['Costo_Unitario_MXN']
-    
-    df = df_raw.groupby('Ticker', as_index=False).agg({
-        'Tipo': 'first', 'Sector': 'first', 'Cantidad': 'sum', 
-        'Inversion_Fila': 'sum', 'Notas': 'first', 'Moneda': 'first'
-    })
-    
+    df = df_raw.groupby('Ticker', as_index=False).agg({'Tipo': 'first', 'Sector': 'first', 'Cantidad': 'sum', 'Inversion_Fila': 'sum', 'Notas': 'first', 'Moneda': 'first'})
     df.rename(columns={'Inversion_Fila': 'Inversion_Total_Real'}, inplace=True)
-    # Costo promedio ponderado en PESOS
     df['Costo_Promedio_Real'] = df.apply(lambda x: x['Inversion_Total_Real'] / x['Cantidad'] if x['Cantidad'] > 0 else 0, axis=1)
 
-    # 4. Mercado
     mercado = obtener_datos_mercado(df['Ticker'].unique(), usd_now)
     df['Precio_Actual'] = df['Ticker'].map(lambda x: mercado[x]['precio'])
     df['Div_Rate'] = df['Ticker'].map(lambda x: mercado[x]['div_rate'])
     df['Div_Yield'] = df['Ticker'].map(lambda x: mercado[x]['div_yield']*100)
 
-    # 5. Resultados
     df['Valor_Mercado'] = df['Cantidad'] * df['Precio_Actual']
     df['Ganancia'] = df['Valor_Mercado'] - df['Inversion_Total_Real']
     df['Rend_%'] = df.apply(lambda x: (x['Ganancia']/x['Inversion_Total_Real']*100) if x['Inversion_Total_Real']>0 else 0, axis=1)
@@ -237,11 +253,7 @@ if df_raw is not None and not df_raw.empty:
     tab1, tab2, tab3 = st.tabs(["📊 Portafolio Principal", "₿ Cripto & USA", "💸 Dividendos"])
 
     def estilo(df_in):
-        return df_in.style.format({
-            'Costo_Promedio_Real': "${:,.2f}", 'Precio_Actual': "${:,.2f}", 
-            'Inversion_Total_Real': "${:,.2f}", 'Valor_Mercado': "${:,.2f}", 
-            'Ganancia': "${:,.2f}", 'Rend_%': "{:,.2f}%"
-        }).applymap(lambda x: f'background-color: {"#113311" if x>=0 else "#331111"}', subset=['Ganancia', 'Rend_%'])
+        return df_in.style.format({'Costo_Promedio_Real': "${:,.2f}", 'Precio_Actual': "${:,.2f}", 'Inversion_Total_Real': "${:,.2f}", 'Valor_Mercado': "${:,.2f}", 'Ganancia': "${:,.2f}", 'Rend_%': "{:,.2f}%"}).applymap(lambda x: f'background-color: {"#113311" if x>=0 else "#331111"}', subset=['Ganancia', 'Rend_%'])
 
     def bloque_activo(df_fuente, titulo, tipo_filtro):
         d = df_fuente[df_fuente['Tipo'].str.upper().str.contains(tipo_filtro)]
@@ -254,12 +266,11 @@ if df_raw is not None and not df_raw.empty:
                 st.plotly_chart(fig, use_container_width=True)
             cols = ['Ticker','Cantidad','Costo_Promedio_Real','Precio_Actual','Inversion_Total_Real','Ganancia','Rend_%']
             st.dataframe(estilo(d[cols]), use_container_width=True)
-        else:
-            st.info(f"No hay activos tipo {titulo}")
+        else: st.info(f"No hay activos tipo {titulo}")
 
     with tab1:
         st.subheader("📈 Valor Total del Patrimonio")
-        with st.spinner("Analizando divisas y mercado..."):
+        with st.spinner("Analizando..."):
             historia = generar_grafico_historico(df_real)
         if not historia.empty:
             fig_hist = px.area(historia, y='Valor_Total')
@@ -270,8 +281,8 @@ if df_raw is not None and not df_raw.empty:
         t_val = df_real['Valor_Mercado'].sum()
         t_inv = df_real['Inversion_Total_Real'].sum()
         t_gan = df_real['Ganancia'].sum()
-        k1.metric("Patrimonio Total", f"${t_val:,.2f}")
-        k2.metric("Costo Total (MXN)", f"${t_inv:,.2f}", help="Suma de costos convertidos a Pesos")
+        k1.metric("Valor Total", f"${t_val:,.2f}")
+        k2.metric("Inversión Total", f"${t_inv:,.2f}")
         k3.metric("Plusvalía", f"${t_gan:,.2f}", delta=f"{(t_gan/t_inv*100):.2f}%" if t_inv>0 else "0%")
         st.markdown("---")
         
@@ -281,7 +292,7 @@ if df_raw is not None and not df_raw.empty:
         with c3: bloque_activo(df_real, "ETFs", "ETF")
 
         st.markdown("---")
-        st.subheader("🔥 Mapa de Calor del Mercado")
+        st.subheader("🔥 Mapa de Calor del Mercado (Portafolio General)")
         if not df_real.empty:
             fig_tree = px.treemap(df_real, path=['Tipo', 'Sector', 'Ticker'], values='Valor_Mercado',
                 color='Rend_%', color_continuous_scale=['#FF4B4B', '#1E1E1E', '#00CC96'], color_continuous_midpoint=0,
@@ -295,6 +306,23 @@ if df_raw is not None and not df_raw.empty:
         col_usa, col_crypto = st.columns(2)
         with col_usa: bloque_activo(df_real, "🇺🇸 Acciones USA", "USA")
         with col_crypto: bloque_activo(df_real, "₿ Criptomonedas", "CRYPTO")
+        
+        # 🚨 NUEVO: MAPA DE CALOR EXCLUSIVO PARA CRYPTO Y USA 🚨
+        st.markdown("---")
+        st.subheader("🔥 Mapa de Calor (Cripto & USA)")
+        
+        # Filtramos solo lo que es USA o CRYPTO
+        df_int = df_real[df_real['Tipo'].str.upper().str.contains('USA|CRYPTO')]
+        
+        if not df_int.empty:
+            fig_tree_int = px.treemap(df_int, path=['Tipo', 'Sector', 'Ticker'], values='Valor_Mercado',
+                color='Rend_%', color_continuous_scale=['#FF4B4B', '#1E1E1E', '#00CC96'], color_continuous_midpoint=0,
+                custom_data=['Precio_Actual', 'Ganancia', 'Rend_%'])
+            fig_tree_int.update_traces(textinfo="label+value+percent entry", hovertemplate="<b>%{label}</b><br>$%{value:,.2f}<br>%{customdata[2]:.2f}%")
+            fig_tree_int.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=400)
+            st.plotly_chart(fig_tree_int, use_container_width=True)
+        else:
+            st.info("Agrega activos tipo 'USA' o 'CRYPTO' en tu Excel para ver este mapa.")
 
     with tab3:
         d = df_real[df_real['Pago_Anual'] > 0.01].copy()
