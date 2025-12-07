@@ -5,49 +5,33 @@ import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-import time
 
 # --- CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Terminal Pro V23 (Privada)", layout="wide", page_icon="🦁")
+st.set_page_config(page_title="Terminal Pro V24", layout="wide", page_icon="🦁")
 
-# --- 🔐 SISTEMA DE LOGIN (CANDADO DE SEGURIDAD) 🔐 ---
+# --- 🔐 SISTEMA DE LOGIN ---
 def check_password():
-    """Retorna True si el usuario ingresó la contraseña correcta."""
-    
-    # 1. Si la contraseña ya está en memoria (ya se logueó), pasar directo
     if st.session_state.get("password_correct", False):
         return True
 
-    # 2. Interfaz de Login
-    st.markdown("""
-        <style>
-        .stTextInput > div > div > input {text-align: center; font-size: 20px;}
-        </style>
-        """, unsafe_allow_html=True)
-    
+    st.markdown("""<style>.stTextInput>div>div>input {text-align: center; font-size: 20px;}</style>""", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.write("### 🦁 Acceso Restringido")
-        st.write("Esta terminal financiera es privada.")
-        pwd_input = st.text_input("Ingresa la contraseña:", type="password")
-        
-        if pwd_input:
-            # Comparamos con la contraseña guardada en Secrets
-            if pwd_input == st.secrets["PASSWORD"]:
+        pwd = st.text_input("Contraseña:", type="password")
+        if pwd:
+            if pwd == st.secrets["PASSWORD"]:
                 st.session_state["password_correct"] = True
-                st.rerun() # Recargamos la página para mostrar el contenido
+                st.rerun()
             else:
-                st.error("❌ Contraseña incorrecta")
-
+                st.error("❌ Incorrecto")
     return False
 
-# SI NO PASA EL LOGIN, DETENEMOS TODO EL CÓDIGO AQUÍ
-if not check_password():
-    st.stop()
+if not check_password(): st.stop()
 
-# =========================================================
-# 🚀 SI LLEGASTE AQUÍ, ES QUE PUSISTE LA CONTRASEÑA BIEN
-# =========================================================
+# ==========================================
+# 🚀 INICIO DEL DASHBOARD
+# ==========================================
 
 st.markdown("""
     <style>
@@ -56,10 +40,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦁 Terminal Patrimonial: Segura")
+st.title("🦁 Terminal Patrimonial: Dividendos Corregidos")
 
-# --- CONEXIÓN ---
-# Ahora leemos el link desde los SECRETOS (Más seguro)
 URL_HOJA = st.secrets["SHEET_URL"]
 
 @st.cache_data(ttl=0) 
@@ -91,8 +73,7 @@ def generar_grafico_historico(df_real):
     
     CORRECCIONES = {
         'SPYL': 'SPLG', 'IVVPESO': 'IVVPESO.MX', 'NAFTRAC': 'NAFTRAC.MX',
-        'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD', 'XRP': 'XRP-USD',
-        'ADA': 'ADA-USD', 'DOGE': 'DOGE-USD', 'DOT': 'DOT-USD'
+        'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD'
     }
     
     for i, row in df_real.iterrows():
@@ -116,7 +97,7 @@ def generar_grafico_historico(df_real):
         except: pass
     return df_historia
 
-# --- MOTOR DE PRECIOS ---
+# --- MOTOR DE PRECIOS & DIVIDENDOS (MEJORADO) ---
 def obtener_datos_mercado(tickers):
     data_dict = {}
     try: usd_now = yf.Ticker("USDMXN=X").history(period="1d")['Close'].iloc[-1]
@@ -126,7 +107,8 @@ def obtener_datos_mercado(tickers):
         'SPYL': 'SPLG', 'IVVPESO': 'IVVPESO.MX', 'NAFTRAC': 'NAFTRAC.MX', 'GLD': 'GLD.MX',
         'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD', 'XRP': 'XRP-USD',
         'ASUR B': 'ASURB.MX', 'VOLAR A': 'VOLARA.MX', 'FIBRAPL 14': 'FIBRAPL14.MX',
-        'FIBRAMQ 12': 'FIBRAMQ12.MX', 'GAP B': 'GAPB.MX', 'OMA B': 'OMAB.MX'
+        'FIBRAMQ 12': 'FIBRAMQ12.MX', 'GAP B': 'GAPB.MX', 'OMA B': 'OMAB.MX',
+        'FUNO 11': 'FUNO11.MX', 'DANHOS 13': 'DANHOS13.MX'
     }
     
     for t_original in tickers:
@@ -152,16 +134,36 @@ def obtener_datos_mercado(tickers):
                 hist = stock.history(period="1d")
                 if not hist.empty:
                     encontrado = True
-                    precio = hist['Close'].iloc[-1]
-                    if ".MX" in ticker_test: info['precio'] = precio
-                    else: info['precio'] = precio * usd_now
+                    precio_nativo = hist['Close'].iloc[-1]
                     
+                    # 1. PRECIO
+                    if ".MX" in ticker_test: info['precio'] = precio_nativo
+                    else: info['precio'] = precio_nativo * usd_now
+                    
+                    # 2. DIVIDENDOS (ESTRATEGIA TRIPLE) 🚑
                     try:
-                        r = stock.info.get('dividendRate', 0) or 0
-                        y = stock.info.get('dividendYield', 0) or 0
-                        if ".MX" not in ticker_test: r = r * usd_now
-                        info['div_rate'] = r
-                        info['div_yield'] = y
+                        # Intento A: Rate directo
+                        rate = stock.info.get('dividendRate', 0)
+                        
+                        # Intento B: Trailing Annual Rate (A veces Yahoo lo mueve aquí)
+                        if rate is None or rate == 0:
+                             rate = stock.info.get('trailingAnnualDividendRate', 0)
+
+                        # Intento C: Yield * Precio Nativo (Cálculo Manual)
+                        yield_pct = stock.info.get('dividendYield', 0)
+                        if (rate is None or rate == 0) and (yield_pct and yield_pct > 0):
+                            rate = precio_nativo * yield_pct
+                        
+                        # Limpieza de None
+                        if rate is None: rate = 0
+                        if yield_pct is None: yield_pct = 0
+                        
+                        # Conversión de Moneda para el Dividendo
+                        if ".MX" not in ticker_test: 
+                            rate = rate * usd_now # Si paga en USD, conviértelo a MXN
+                            
+                        info['div_rate'] = rate
+                        info['div_yield'] = yield_pct
                     except: pass
             except: pass
         data_dict[t_original] = info
@@ -173,7 +175,7 @@ with st.sidebar:
     if st.button('🔄 ACTUALIZAR'):
         st.cache_data.clear()
         st.rerun()
-    if st.button("🔒 Cerrar Sesión"):
+    if st.button("🔒 Salir"):
         st.session_state["password_correct"] = False
         st.rerun()
     st.caption(f"Actualizado: {datetime.now().strftime('%H:%M:%S')}")
@@ -259,7 +261,7 @@ if df_raw is not None and not df_raw.empty:
 
     with tab1:
         st.subheader("📈 Valor Total del Patrimonio")
-        with st.spinner("Conectando de forma segura..."):
+        with st.spinner("Analizando..."):
             historia = generar_grafico_historico(df_real)
         if not historia.empty:
             fig_hist = px.area(historia, y='Valor_Total')
@@ -270,7 +272,6 @@ if df_raw is not None and not df_raw.empty:
         t_val = df_real['Valor_Mercado'].sum()
         t_inv = df_real['Inversion_Total_Real'].sum()
         t_gan = df_real['Ganancia'].sum()
-        
         k1.metric("Patrimonio Total", f"${t_val:,.2f}")
         k2.metric("Costo Total", f"${t_inv:,.2f}")
         k3.metric("Plusvalía", f"${t_gan:,.2f}", delta=f"{(t_gan/t_inv*100):.2f}%" if t_inv>0 else "0%")
@@ -287,7 +288,7 @@ if df_raw is not None and not df_raw.empty:
         with col_crypto: bloque_activo(df_real, "₿ Criptomonedas", "CRYPTO")
 
     with tab3:
-        d = df_real[df_real['Pago_Anual'] > 0].copy()
+        d = df_real[df_real['Pago_Anual'] > 0.1].copy() # Filtro > 0.1 pesos para limpiar basura
         if not d.empty:
             c1, c2 = st.columns(2)
             c1.metric("Ingreso Anual", f"${d['Pago_Anual'].sum():,.2f}")
@@ -295,7 +296,7 @@ if df_raw is not None and not df_raw.empty:
             st.dataframe(d[['Ticker','Div_Yield','Pago_Mensual','Pago_Anual']].sort_values('Pago_Mensual', ascending=False)
                          .style.format({'Div_Yield': "{:.2f}%", 'Pago_Mensual': "${:,.2f}", 'Pago_Anual': "${:,.2f}"})
                          .bar(subset=['Pago_Mensual'], color='#00CC96'), use_container_width=True)
-        else: st.info("Sin dividendos.")
+        else: st.info("No se detectaron dividendos (o Yahoo Finance no los reporta para estos activos).")
 
 else:
-    st.info("Cargando sistema seguro...")
+    st.info("Cargando sistema...")
